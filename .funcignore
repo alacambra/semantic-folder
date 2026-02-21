@@ -1,0 +1,17 @@
+.git/
+.gitignore
+.vscode/
+.claude/
+.env
+.env.example
+.python-version
+tests/
+infra/
+iterations/
+__pycache__/
+*.pyc
+*.md
+Makefile
+pyproject.toml
+poetry.lock
+.funcignore

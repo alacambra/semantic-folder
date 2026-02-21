@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "transform-to-agent",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "/Users/albert/git/ai-driven-software-development/agent-transformation-kit/transform_to_agent.py",
+        "/Users/albert/git/ai-driven-software-development/4-development-process/iteration-orchestration-process.md",
+        "--output-agents",
+        "/Users/albert/git/semantic-folder/.claude/agents",
+        "--output-skills",
+        "/Users/albert/git/semantic-folder/.claude/skills"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "transform-to-skill",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "/Users/albert/git/ai-driven-software-development/skill-transformation-kit/transform_to_skill.py",
+        "--all",
+        "--output",
+        "/Users/albert/git/semantic-folder/.claude/skills"
+      ],
+      "options": {
+        "cwd": "/Users/albert/git/ai-driven-software-development"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

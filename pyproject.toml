@@ -1,0 +1,45 @@
+[project]
+name = "semantic-folder"
+version = "0.1.0"
+description = "AI-powered knowledge context for Microsoft Copilot — generates folder descriptions across OneDrive"
+requires-python = ">=3.12"
+license = "UNLICENSED"
+
+dependencies = [
+    "azure-functions>=1.21",
+]
+
+[tool.poetry]
+packages = [{ include = "semantic_folder", from = "src" }]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=src --cov-report=term-missing"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "ruff (>=0.15.2,<0.16.0)",
+    "pyright (>=1.1.408,<2.0.0)",
+    "pytest (>=9.0.2,<10.0.0)",
+    "pytest-asyncio (>=1.3.0,<2.0.0)",
+    "pytest-cov (>=7.0.0,<8.0.0)"
+]

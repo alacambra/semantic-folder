@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+
+# Poetry (lock file IS committed for reproducible builds)
+
+# Azure Functions
+local.settings.json
+.python_packages/
+bin/
+obj/
+
+# Terraform
+infra/.terraform/
+infra/.terraform.lock.hcl
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/*.tfvars
+!infra/terraform.tfvars.example
+
+# IDE
+.vscode/*
+!.vscode/tasks.json
+.idea/
+
+# Environment
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+
+# Coverage
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/**/*

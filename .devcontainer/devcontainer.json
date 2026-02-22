@@ -1,0 +1,24 @@
+{
+  "name": "semantic-folder",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh",
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python"
+      ]
+    }
+  },
+  "mounts": [
+    "source=semantic-folder-zshhistory,target=/home/vscode/.zsh_history,type=volume",
+    "source=semantic-folder-claude,target=/home/vscode/.claude,type=volume"
+  ]
+}

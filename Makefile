@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test deploy
+.PHONY: lint typecheck test requirements deploy
 
 lint:
 	poetry run ruff check src/ tests/ function_app.py
@@ -10,5 +10,8 @@ typecheck:
 test:
 	poetry run pytest
 
-deploy:
+requirements:
+	poetry export --without-hashes --only main -o requirements.txt
+
+deploy: requirements
 	func azure functionapp publish $(FUNCTION_APP_NAME)

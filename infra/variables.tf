@@ -21,6 +21,12 @@ variable "location" {
   default     = "germanywestcentral"
 }
 
+variable "anthropic_api_key" {
+  description = "Anthropic API key for AI description generation"
+  type        = string
+  sensitive   = true
+}
+
 variable "graph_api_permissions" {
   description = "Microsoft Graph API permissions for the App Registration"
   type = list(object({

@@ -44,6 +44,8 @@ resource "azurerm_linux_function_app" "main" {
     "SF_CLIENT_SECRET"         = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_client_secret.id})"
     "SF_TENANT_ID"             = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_tenant_id.id})"
     "SF_DRIVE_USER"            = "alacambra@datamantics.onmicrosoft.com"
+    "SF_ANTHROPIC_API_KEY"     = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_anthropic_api_key.id})"
+    "SF_MAX_FILE_CONTENT_BYTES" = "5242880"
     "KEY_VAULT_URI"            = azurerm_key_vault.main.vault_uri
   }
 

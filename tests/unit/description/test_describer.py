@@ -1,12 +1,15 @@
 """Unit tests for description/describer.py — AnthropicDescriber behaviour."""
 
+import base64
 from unittest.mock import MagicMock, patch
 
 from anthropic.types import Message, TextBlock, Usage
 
 from semantic_folder.description.describer import (
-    MAX_FILE_CONTENT_BYTES,
+    DEFAULT_MAX_FILE_CONTENT_BYTES,
     AnthropicDescriber,
+    _extract_docx_text,
+    _file_extension,
     anthropic_describer_from_config,
 )
 
@@ -54,16 +57,66 @@ class TestAnthropicDescriberInit:
 
 
 # ---------------------------------------------------------------------------
-# summarize_file tests
+# _file_extension tests
 # ---------------------------------------------------------------------------
 
 
-class TestSummarizeFile:
+class TestFileExtension:
+    def test_docx(self) -> None:
+        assert _file_extension("report.docx") == ".docx"
+
+    def test_pdf(self) -> None:
+        assert _file_extension("invoice.pdf") == ".pdf"
+
+    def test_uppercase(self) -> None:
+        assert _file_extension("REPORT.DOCX") == ".docx"
+
+    def test_no_extension(self) -> None:
+        assert _file_extension("Makefile") == ""
+
+    def test_multiple_dots(self) -> None:
+        assert _file_extension("archive.tar.gz") == ".gz"
+
+
+# ---------------------------------------------------------------------------
+# _extract_docx_text tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDocxText:
+    def test_extracts_text_from_valid_docx(self) -> None:
+        import io
+
+        from docx import Document
+
+        doc = Document()
+        doc.add_paragraph("Hello World")
+        doc.add_paragraph("Second paragraph")
+        buf = io.BytesIO()
+        doc.save(buf)
+        docx_bytes = buf.getvalue()
+
+        result = _extract_docx_text(docx_bytes)
+
+        assert "Hello World" in result
+        assert "Second paragraph" in result
+
+    def test_returns_empty_string_on_invalid_bytes(self) -> None:
+        result = _extract_docx_text(b"not a valid docx file")
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# summarize_file tests — text path
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeFileText:
     def test_calls_messages_create_with_correct_params(self) -> None:
         describer, mock_client = _make_describer()
         mock_client.messages.create.return_value = _mock_message_response("A test summary.")
 
-        describer.summarize_file("report.pdf", b"file content here")
+        describer.summarize_file("report.txt", b"file content here")
 
         mock_client.messages.create.assert_called_once()
         call_kwargs = mock_client.messages.create.call_args[1]
@@ -72,21 +125,21 @@ class TestSummarizeFile:
         messages = call_kwargs["messages"]
         assert len(messages) == 1
         assert messages[0]["role"] == "user"
-        assert "report.pdf" in messages[0]["content"]
+        assert "report.txt" in messages[0]["content"]
         assert "file content here" in messages[0]["content"]
 
     def test_truncates_content_to_max_bytes(self) -> None:
         describer, mock_client = _make_describer()
         mock_client.messages.create.return_value = _mock_message_response("Summary.")
 
-        large_content = b"x" * (MAX_FILE_CONTENT_BYTES + 5000)
+        large_content = b"x" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 5000)
         describer.summarize_file("big.txt", large_content)
 
         call_kwargs = mock_client.messages.create.call_args[1]
         prompt_content = call_kwargs["messages"][0]["content"]
-        # The prompt should contain at most MAX_FILE_CONTENT_BYTES worth of 'x'
-        assert "x" * MAX_FILE_CONTENT_BYTES in prompt_content
-        assert "x" * (MAX_FILE_CONTENT_BYTES + 1) not in prompt_content
+        # The prompt should contain at most DEFAULT_MAX_FILE_CONTENT_BYTES worth of 'x'
+        assert "x" * DEFAULT_MAX_FILE_CONTENT_BYTES in prompt_content
+        assert "x" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 1) not in prompt_content
 
     def test_handles_binary_content_with_replace(self) -> None:
         describer, mock_client = _make_describer()
@@ -106,7 +159,7 @@ class TestSummarizeFile:
             "This is a quarterly report."
         )
 
-        result = describer.summarize_file("report.pdf", b"Q1 results...")
+        result = describer.summarize_file("report.txt", b"Q1 results...")
 
         assert result == "This is a quarterly report."
 
@@ -118,6 +171,132 @@ class TestSummarizeFile:
 
         assert result == "Empty file."
         mock_client.messages.create.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# summarize_file tests — docx path
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeFileDocx:
+    def test_extracts_text_and_sends_as_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Invoice spec.")
+
+        with patch(
+            "semantic_folder.description.describer._extract_docx_text",
+            return_value="Invoice flow specification content",
+        ):
+            result = describer.summarize_file("Invoice_Flow.docx", b"\x50\x4b\x03\x04")
+
+        assert result == "Invoice spec."
+        call_kwargs = mock_client.messages.create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "Invoice_Flow.docx" in prompt
+        assert "Invoice flow specification content" in prompt
+
+    def test_truncates_extracted_text_to_max_bytes(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        long_text = "y" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 5000)
+        with patch(
+            "semantic_folder.description.describer._extract_docx_text",
+            return_value=long_text,
+        ):
+            describer.summarize_file("big.docx", b"\x50\x4b")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "y" * DEFAULT_MAX_FILE_CONTENT_BYTES in prompt
+        assert "y" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 1) not in prompt
+
+    def test_fallback_when_extraction_fails(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Unknown doc.")
+
+        with patch(
+            "semantic_folder.description.describer._extract_docx_text",
+            return_value="",
+        ):
+            describer.summarize_file("broken.docx", b"bad data")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "[could not extract text from broken.docx]" in prompt
+
+    def test_case_insensitive_extension(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        with patch(
+            "semantic_folder.description.describer._extract_docx_text",
+            return_value="Extracted text",
+        ) as mock_extract:
+            describer.summarize_file("Report.DOCX", b"\x50\x4b\x03\x04")
+
+        mock_extract.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# summarize_file tests — pdf path
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeFilePdf:
+    def test_sends_base64_document_block(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("PDF summary.")
+
+        pdf_bytes = b"%PDF-1.4 fake content"
+        result = describer.summarize_file("report.pdf", pdf_bytes)
+
+        assert result == "PDF summary."
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == "test-model"
+        assert call_kwargs["max_tokens"] == 150
+        messages = call_kwargs["messages"]
+        assert len(messages) == 1
+        content_blocks = messages[0]["content"]
+        assert isinstance(content_blocks, list)
+        assert len(content_blocks) == 2
+
+        # Document block
+        doc_block = content_blocks[0]
+        assert doc_block["type"] == "document"
+        assert doc_block["source"]["type"] == "base64"
+        assert doc_block["source"]["media_type"] == "application/pdf"
+        expected_b64 = base64.standard_b64encode(pdf_bytes).decode("ascii")
+        assert doc_block["source"]["data"] == expected_b64
+
+        # Text block with prompt
+        text_block = content_blocks[1]
+        assert text_block["type"] == "text"
+        assert "report.pdf" in text_block["text"]
+        assert "Summarize this file in one sentence" in text_block["text"]
+
+    def test_does_not_truncate_pdf_content(self) -> None:
+        """PDF content is sent in full (base64), not truncated to max_file_content_bytes."""
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Large PDF.")
+
+        large_pdf = b"%PDF" + b"\x00" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 5000)
+        describer.summarize_file("large.pdf", large_pdf)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        doc_block = call_kwargs["messages"][0]["content"][0]
+        expected_b64 = base64.standard_b64encode(large_pdf).decode("ascii")
+        assert doc_block["source"]["data"] == expected_b64
+
+    def test_case_insensitive_pdf_extension(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        describer.summarize_file("Report.PDF", b"%PDF-1.4")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        content_blocks = call_kwargs["messages"][0]["content"]
+        assert content_blocks[0]["type"] == "document"
 
 
 # ---------------------------------------------------------------------------
@@ -170,9 +349,11 @@ class TestAnthropicDescriberFromConfig:
         config = MagicMock()
         config.anthropic_api_key = "sk-from-config"
         config.anthropic_model = "claude-haiku-4-5-20251001"
+        config.max_file_content_bytes = 16384
 
         with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
             describer = anthropic_describer_from_config(config)
 
         mock_cls.assert_called_once_with(api_key="sk-from-config")
         assert describer._model == "claude-haiku-4-5-20251001"
+        assert describer._max_file_content_bytes == 16384

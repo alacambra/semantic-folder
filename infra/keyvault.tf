@@ -50,3 +50,11 @@ resource "azurerm_key_vault_secret" "sf_tenant_id" {
 
   depends_on = [azurerm_role_assignment.deployer_keyvault_admin]
 }
+
+resource "azurerm_key_vault_secret" "sf_anthropic_api_key" {
+  name         = "sf-anthropic-api-key"
+  value        = var.anthropic_api_key
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_role_assignment.deployer_keyvault_admin]
+}

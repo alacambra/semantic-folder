@@ -4,6 +4,9 @@ import logging
 
 import azure.functions as func
 
+from semantic_folder.config import load_config
+from semantic_folder.orchestration.processor import folder_processor_from_config
+
 logger = logging.getLogger(__name__)
 
 bp = func.Blueprint()
@@ -17,8 +20,8 @@ bp = func.Blueprint()
 def timer_trigger(timer: func.TimerRequest) -> None:
     """Scheduled trigger that processes OneDrive folder changes.
 
-    Runs every 5 minutes. Currently a placeholder — Graph delta processing
-    will be implemented in iteration 2.
+    Runs every 5 minutes. Detects changed OneDrive folders via the delta API
+    and logs which folders need description regeneration.
     """
     logger.info("Timer trigger fired")
 
@@ -26,8 +29,14 @@ def timer_trigger(timer: func.TimerRequest) -> None:
         if timer.past_due:
             logger.warning("Timer trigger is past due")
 
-        # Placeholder: Graph delta processing goes here (iteration 2)
-        logger.info("Timer trigger completed successfully")
+        config = load_config()
+        processor = folder_processor_from_config(config)
+        listings = processor.process_delta()
+        for listing in listings:
+            logger.info(
+                "Folder to regenerate: %s (%d files)", listing.folder_path, len(listing.files)
+            )
+        logger.info("Delta processing complete — %d folder(s) need regeneration", len(listings))
 
     except Exception:
         logger.exception("Timer trigger failed")

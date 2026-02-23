@@ -35,20 +35,22 @@ RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Azure Functions Core Tools v4
+# Pin to bookworm — Microsoft does not publish packages for Debian trixie yet
 RUN curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor \
         -o /usr/share/keyrings/microsoft.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] \
-        https://packages.microsoft.com/repos/azure-cli/ $(lsb_release -cs) main" \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/microsoft.gpg] \
+        https://packages.microsoft.com/debian/12/prod bookworm main" \
         > /etc/apt/sources.list.d/azure-functions-core-tools.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends azure-functions-core-tools-4 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Terraform
+# Pin to bookworm — HashiCorp may not publish packages for Debian trixie yet
 RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor \
         -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
-        https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+        https://apt.releases.hashicorp.com bookworm main" \
         > /etc/apt/sources.list.d/hashicorp.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends terraform \

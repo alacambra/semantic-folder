@@ -1,9 +1,13 @@
 {
   "version": "2.0",
   "logging": {
+    "logLevel": {
+      "default": "Information",
+      "Function.timer_trigger": "Information"
+    },
     "applicationInsights": {
       "samplingSettings": {
-        "isEnabled": true
+        "isEnabled": false
       }
     }
   },

@@ -26,26 +26,26 @@ resource "azurerm_role_assignment" "deployer_keyvault_admin" {
   principal_id         = data.azurerm_client_config.current.object_id
 }
 
-# Placeholder secrets — values set manually or via CI after initial deployment
-resource "azurerm_key_vault_secret" "graph_client_id" {
-  name         = "graph-client-id"
-  value        = "placeholder"
+# Secrets populated from Terraform-managed App Registration
+resource "azurerm_key_vault_secret" "sf_client_id" {
+  name         = "sf-client-id"
+  value        = azuread_application.semantic_folder.client_id
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [azurerm_role_assignment.deployer_keyvault_admin]
 }
 
-resource "azurerm_key_vault_secret" "graph_client_secret" {
-  name         = "graph-client-secret"
-  value        = "placeholder"
+resource "azurerm_key_vault_secret" "sf_client_secret" {
+  name         = "sf-client-secret"
+  value        = azuread_application_password.semantic_folder.value
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [azurerm_role_assignment.deployer_keyvault_admin]
 }
 
-resource "azurerm_key_vault_secret" "graph_tenant_id" {
-  name         = "graph-tenant-id"
-  value        = "placeholder"
+resource "azurerm_key_vault_secret" "sf_tenant_id" {
+  name         = "sf-tenant-id"
+  value        = data.azuread_client_config.current.tenant_id
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [azurerm_role_assignment.deployer_keyvault_admin]

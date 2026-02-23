@@ -1,3 +1,19 @@
+resource "azurerm_log_analytics_workspace" "main" {
+  name                = "log-${local.resource_prefix}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+}
+
+resource "azurerm_application_insights" "main" {
+  name                = "appi-${local.resource_prefix}"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  workspace_id        = azurerm_log_analytics_workspace.main.id
+  application_type    = "web"
+}
+
 resource "azurerm_service_plan" "main" {
   name                = "asp-${local.resource_prefix}"
   resource_group_name = azurerm_resource_group.main.name
@@ -19,13 +35,15 @@ resource "azurerm_linux_function_app" "main" {
     application_stack {
       python_version = "3.12"
     }
+    application_insights_connection_string = azurerm_application_insights.main.connection_string
   }
 
   app_settings = {
     "FUNCTIONS_WORKER_RUNTIME" = "python"
-    "GRAPH_CLIENT_ID"          = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.graph_client_id.id})"
-    "GRAPH_CLIENT_SECRET"      = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.graph_client_secret.id})"
-    "GRAPH_TENANT_ID"          = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.graph_tenant_id.id})"
+    "SF_CLIENT_ID"             = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_client_id.id})"
+    "SF_CLIENT_SECRET"         = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_client_secret.id})"
+    "SF_TENANT_ID"             = "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.sf_tenant_id.id})"
+    "SF_DRIVE_USER"            = "alacambra@datamantics.onmicrosoft.com"
     "KEY_VAULT_URI"            = azurerm_key_vault.main.vault_uri
   }
 

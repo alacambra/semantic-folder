@@ -36,6 +36,13 @@ ALLOWED_DOMAINS=(
     "packages.microsoft.com"
     "deb.nodesource.com"
     "registry.npmjs.org"
+    # VS Code extensions marketplace
+    "marketplace.visualstudio.com"
+    "vscode.blob.core.windows.net"
+    "az764295.vo.msecnd.net"
+    "gallery.vsassets.io"
+    "update.code.visualstudio.com"
+    "open-vsx.org"
 )
 
 echo "Resolving allowed domains..."
@@ -60,12 +67,16 @@ iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
 
-# Allow traffic to whitelisted IPs
+# Allow all HTTPS outbound (port 443) — CDNs use too many rotating IPs
+# for IP-based allowlisting to work reliably
+iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+
+# Allow traffic to whitelisted IPs (for non-HTTPS services)
 iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
 
-# Default deny all other outbound traffic
+# Default deny all other outbound traffic (blocks non-HTTPS like HTTP, SSH, etc.)
 iptables -P OUTPUT DROP
 
 echo "Firewall configured successfully."
-echo "Allowed: Anthropic API, PyPI, GitHub, Azure (Graph, login, storage, functions), Terraform, npm"
-echo "Blocked: all other outbound traffic"
+echo "Allowed: all HTTPS (443), DNS, plus whitelisted IPs for other ports"
+echo "Blocked: HTTP (80), SSH, and all other non-HTTPS outbound traffic"

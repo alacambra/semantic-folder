@@ -3,7 +3,8 @@
   "logging": {
     "logLevel": {
       "default": "Information",
-      "Function.timer_trigger": "Information"
+      "Function.timer_trigger": "Information",
+      "Function.manual_trigger": "Information"
     },
     "applicationInsights": {
       "samplingSettings": {

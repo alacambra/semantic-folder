@@ -1,9 +1,12 @@
 """Unit tests for orchestration/processor.py — FolderProcessor behaviour."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-from semantic_folder.graph.models import DriveItem
-from semantic_folder.orchestration.processor import FolderProcessor
+from semantic_folder.graph.models import DriveItem, FolderListing
+from semantic_folder.orchestration.processor import (
+    FolderProcessor,
+    folder_processor_from_config,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -315,3 +318,131 @@ class TestProcessDelta:
         assert listing.folder_id == "folder-xyz"
         assert listing.folder_path == "/drive/root:/My Folder"
         assert sorted(listing.files) == ["data.csv", "readme.md"]
+
+    def test_uploads_descriptions_before_saving_token(self) -> None:
+        """Descriptions must be uploaded before the delta token is saved."""
+        processor, mock_delta, mock_graph = _make_processor()
+
+        mock_delta.get_delta_token.return_value = "tok"
+        mock_delta.fetch_changes.return_value = (
+            [_file_item(parent_id="folder-1")],
+            "new-tok",
+        )
+        mock_graph.get.return_value = {
+            "value": [
+                {
+                    "id": "c1",
+                    "name": "file.txt",
+                    "parentReference": {"id": "folder-1", "path": "/drive/root:/Docs"},
+                }
+            ]
+        }
+
+        call_order: list[str] = []
+        mock_graph.put_content.side_effect = lambda *a, **kw: call_order.append("put_content")
+        mock_delta.save_delta_token.side_effect = lambda *a, **kw: call_order.append(
+            "save_delta_token"
+        )
+
+        processor.process_delta()
+
+        assert call_order == ["put_content", "save_delta_token"]
+
+    def test_uploads_description_for_each_listing(self) -> None:
+        """Each folder listing should trigger a put_content call."""
+        processor, mock_delta, mock_graph = _make_processor()
+
+        mock_delta.get_delta_token.return_value = None
+        mock_delta.fetch_changes.return_value = (
+            [
+                _file_item(id="i1", parent_id="p1"),
+                _file_item(id="i2", parent_id="p2"),
+            ],
+            "tok",
+        )
+        mock_graph.get.return_value = {"value": []}
+
+        processor.process_delta()
+
+        assert mock_graph.put_content.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# upload_description tests
+# ---------------------------------------------------------------------------
+
+
+class TestUploadDescription:
+    def test_calls_put_content_with_correct_path(self) -> None:
+        processor, _, mock_graph = _make_processor()
+
+        listing = FolderListing(
+            folder_id="folder-abc",
+            folder_path="/drive/root:/Docs",
+            files=["report.pdf"],
+        )
+
+        processor.upload_description(listing)
+
+        mock_graph.put_content.assert_called_once()
+        call_args = mock_graph.put_content.call_args
+        path = call_args[0][0]
+        assert path == (
+            "/users/testuser@contoso.onmicrosoft.com/drive/items/folder-abc"
+            ":/folder_description.md:/content"
+        )
+
+    def test_uses_configured_filename(self) -> None:
+        mock_delta = MagicMock()
+        mock_graph = MagicMock()
+        processor = FolderProcessor(
+            delta_processor=mock_delta,
+            graph_client=mock_graph,
+            drive_user="user@example.com",
+            folder_description_filename="custom_desc.md",
+        )
+
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=[])
+
+        processor.upload_description(listing)
+
+        path = mock_graph.put_content.call_args[0][0]
+        assert ":/custom_desc.md:/content" in path
+
+    def test_content_is_utf8_encoded_markdown(self) -> None:
+        processor, _, mock_graph = _make_processor()
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/drive/root:/Test",
+            files=["a.txt"],
+        )
+
+        processor.upload_description(listing)
+
+        content = mock_graph.put_content.call_args[0][1]
+        assert isinstance(content, bytes)
+        text = content.decode("utf-8")
+        assert "---" in text
+        assert "## a.txt" in text
+        assert "[a.txt-description]" in text
+
+
+# ---------------------------------------------------------------------------
+# folder_processor_from_config tests
+# ---------------------------------------------------------------------------
+
+
+class TestFolderProcessorFromConfig:
+    @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
+    @patch("semantic_folder.orchestration.processor.graph_client_from_config")
+    def test_passes_folder_description_filename(
+        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock
+    ) -> None:
+        config = MagicMock()
+        config.drive_user = "user@example.com"
+        config.folder_description_filename = "custom.md"
+
+        processor = folder_processor_from_config(config)
+
+        assert processor._folder_description_filename == "custom.md"

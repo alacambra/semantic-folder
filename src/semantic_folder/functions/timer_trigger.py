@@ -13,15 +13,15 @@ bp = func.Blueprint()
 
 
 @bp.timer_trigger(
-    schedule="0 */5 * * * *",
+    schedule="0 0 2 * * *",
     arg_name="timer",
     run_on_startup=False,
 )
 def timer_trigger(timer: func.TimerRequest) -> None:
     """Scheduled trigger that processes OneDrive folder changes.
 
-    Runs every 5 minutes. Detects changed OneDrive folders via the delta API
-    and logs which folders need description regeneration.
+    Runs daily at 02:00 UTC. Detects changed OneDrive folders via the delta API
+    and generates description files for each affected folder.
     """
     logger.info("[timer_trigger] timer trigger fired")
 

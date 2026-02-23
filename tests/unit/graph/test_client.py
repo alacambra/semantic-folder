@@ -156,15 +156,72 @@ class TestGraphClientGet:
 
 
 class TestGraphClientPutContent:
-    def test_put_content_raises_not_implemented(self) -> None:
+    def test_put_content_sends_put_with_correct_url_and_headers(self) -> None:
         client = _make_client()
-        with pytest.raises(NotImplementedError):
-            client.put_content("/me/drive/items/abc/content", b"# Hello", "text/markdown")
+        _mock_token_success(client)
 
-    def test_put_content_raises_not_implemented_with_default_content_type(self) -> None:
+        mock_response = MagicMock()
+        mock_response.read.return_value = b""
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("semantic_folder.graph.client.urllib_request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = mock_response
+            client.put_content("/users/u/drive/items/f:/desc.md:/content", b"# Hello")
+
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == (
+            "https://graph.microsoft.com/v1.0/users/u/drive/items/f:/desc.md:/content"
+        )
+        assert req.get_method() == "PUT"
+        assert req.get_header("Authorization") == "Bearer fake-token-abc"
+        assert req.get_header("Content-type") == "text/markdown"
+        assert req.data == b"# Hello"
+
+    def test_put_content_uses_custom_content_type(self) -> None:
         client = _make_client()
-        with pytest.raises(NotImplementedError):
-            client.put_content("/me/drive/items/abc/content", b"data")
+        _mock_token_success(client)
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = b""
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("semantic_folder.graph.client.urllib_request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = mock_response
+            client.put_content("/path", b"data", content_type="application/json")
+
+        req = mock_urlopen.call_args[0][0]
+        assert req.get_header("Content-type") == "application/json"
+
+    def test_put_content_raises_graph_api_error_on_non_2xx(self) -> None:
+        client = _make_client()
+        _mock_token_success(client)
+
+        error_body = json.dumps({"error": {"message": "Access denied"}}).encode()
+        http_error = HTTPError(
+            url="https://graph.microsoft.com/v1.0/path",
+            code=403,
+            msg="Forbidden",
+            hdrs=MagicMock(),  # type: ignore[arg-type]
+            fp=BytesIO(error_body),
+        )
+
+        with (
+            patch("semantic_folder.graph.client.urllib_request.urlopen", side_effect=http_error),
+            pytest.raises(GraphApiError) as exc_info,
+        ):
+            client.put_content("/path", b"content")
+
+        assert exc_info.value.status_code == 403
+        assert "Access denied" in exc_info.value.message
+
+    def test_put_content_raises_auth_error_when_token_fails(self) -> None:
+        client = _make_client()
+        _mock_token_failure(client)
+
+        with pytest.raises(GraphAuthError):
+            client.put_content("/path", b"content")
 
 
 # ---------------------------------------------------------------------------

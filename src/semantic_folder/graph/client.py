@@ -111,18 +111,36 @@ class GraphClient:
     ) -> None:
         """Perform an authenticated PUT request to upload content to the Graph API.
 
-        This method is a stub for IT-4. It will be implemented when folder
-        description upload is required.
-
         Args:
             path: URL path relative to BASE_URL (must start with '/').
             content: Raw bytes to upload.
             content_type: MIME type for the Content-Type header.
 
         Raises:
-            NotImplementedError: Always — stub pending IT-4 implementation.
+            GraphAuthError: If token acquisition fails.
+            GraphApiError: If the API returns a non-2xx status code.
         """
-        raise NotImplementedError("put_content will be implemented in IT-4")
+        token = self._acquire_token()
+        url = f"{GRAPH_BASE_URL}{path}"
+        req = urllib_request.Request(
+            url,
+            data=content,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": content_type,
+            },
+            method="PUT",
+        )
+        try:
+            with urllib_request.urlopen(req) as resp:
+                resp.read()  # drain response body
+        except HTTPError as exc:
+            raw = exc.read()
+            try:
+                detail = json.loads(raw).get("error", {}).get("message", exc.reason)
+            except Exception:
+                detail = exc.reason
+            raise GraphApiError(exc.code, detail) from exc
 
 
 def graph_client_from_config(config: AppConfig) -> GraphClient:

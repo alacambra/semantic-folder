@@ -75,6 +75,26 @@ class TestFolderListing:
         a.files.append("x.txt")
         assert b.files == []
 
+    def test_file_ids_defaults_to_empty_list(self) -> None:
+        listing = FolderListing(folder_id="f-001", folder_path="/drive/root:/Documents")
+        assert listing.file_ids == []
+
+    def test_instantiation_with_file_ids(self) -> None:
+        listing = FolderListing(
+            folder_id="f-002",
+            folder_path="/drive/root:/Projects",
+            files=["readme.md", "plan.docx"],
+            file_ids=["id-1", "id-2"],
+        )
+        assert listing.file_ids == ["id-1", "id-2"]
+
+    def test_file_ids_default_factory_independent(self) -> None:
+        """Each FolderListing instance must have its own file_ids list."""
+        a = FolderListing(folder_id="1", folder_path="/root")
+        b = FolderListing(folder_id="2", folder_path="/root")
+        a.file_ids.append("id-x")
+        assert b.file_ids == []
+
     def test_equality(self) -> None:
         a = FolderListing("1", "/root", ["a.txt"])
         b = FolderListing("1", "/root", ["a.txt"])

@@ -5,11 +5,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from semantic_folder.description.describer import (
+    AnthropicDescriber,
+    anthropic_describer_from_config,
+)
 from semantic_folder.description.generator import generate_description
 from semantic_folder.graph.client import GraphClient, graph_client_from_config
 from semantic_folder.graph.delta import DeltaProcessor, delta_processor_from_config
 from semantic_folder.graph.models import (
     FIELD_FOLDER,
+    FIELD_ID,
     FIELD_NAME,
     FIELD_PARENT_REFERENCE,
     FIELD_PATH,
@@ -32,6 +37,7 @@ class FolderProcessor:
         delta_processor: DeltaProcessor,
         graph_client: GraphClient,
         drive_user: str,
+        describer: AnthropicDescriber,
         folder_description_filename: str = "folder_description.md",
     ) -> None:
         """Initialise the folder processor.
@@ -40,11 +46,13 @@ class FolderProcessor:
             delta_processor: DeltaProcessor instance for fetching and persisting delta state.
             graph_client: Authenticated GraphClient for enumerating folder children.
             drive_user: UPN or object ID of the OneDrive user (same as DeltaProcessor).
+            describer: AnthropicDescriber instance for AI description generation.
             folder_description_filename: Name of the description file to generate and upload.
         """
         self._delta = delta_processor
         self._graph = graph_client
         self._drive_user = drive_user
+        self._describer = describer
         self._folder_description_filename = folder_description_filename
 
     def resolve_folders(self, items: list[DriveItem]) -> list[str]:
@@ -97,20 +105,50 @@ class FolderProcessor:
             if FIELD_FOLDER not in child and FIELD_NAME in child
         ]
 
-        return FolderListing(folder_id=folder_id, folder_path=folder_path, files=files)
+        file_ids = [
+            child[FIELD_ID] for child in children if FIELD_FOLDER not in child and FIELD_ID in child
+        ]
+
+        return FolderListing(
+            folder_id=folder_id, folder_path=folder_path, files=files, file_ids=file_ids
+        )
+
+    def read_file_contents(self, listing: FolderListing) -> dict[str, bytes]:
+        """Download content for each file in a folder listing.
+
+        Args:
+            listing: FolderListing with file names and IDs.
+
+        Returns:
+            Mapping of filename to raw bytes content.
+        """
+        contents: dict[str, bytes] = {}
+        for name, file_id in zip(listing.files, listing.file_ids, strict=True):
+            path = f"/users/{self._drive_user}/drive/items/{file_id}/content"
+            try:
+                contents[name] = self._graph.get_content(path)
+            except Exception:
+                logger.warning(
+                    "[read_file_contents] failed to read file; filename:%s;file_id:%s",
+                    name,
+                    file_id,
+                )
+                contents[name] = b""
+        return contents
 
     def upload_description(self, listing: FolderListing) -> None:
-        """Generate a placeholder description and upload it to OneDrive.
+        """Generate an AI-powered description and upload it to OneDrive.
 
-        Creates a FolderDescription with placeholder content for all files
-        in the listing, serializes it to Markdown, and uploads the result
-        as ``folder_description.md`` (or the configured filename) to the
-        folder in OneDrive.
+        Reads file content for each file in the listing, generates an
+        AI description using the Anthropic describer, serializes the
+        result to Markdown, and uploads it as ``folder_description.md``
+        (or the configured filename) to the folder in OneDrive.
 
         Args:
             listing: FolderListing for the folder to describe.
         """
-        description = generate_description(listing)
+        file_contents = self.read_file_contents(listing)
+        description = generate_description(listing, self._describer, file_contents)
         content = description.to_markdown().encode("utf-8")
         path = (
             f"/users/{self._drive_user}/drive/items/{listing.folder_id}"
@@ -159,8 +197,8 @@ class FolderProcessor:
 def folder_processor_from_config(config: AppConfig) -> FolderProcessor:
     """Construct a FolderProcessor from application configuration.
 
-    Creates a GraphClient and DeltaProcessor from the config, then
-    wires them into a FolderProcessor.
+    Creates a GraphClient, DeltaProcessor, and AnthropicDescriber from the
+    config, then wires them into a FolderProcessor.
 
     Args:
         config: Application configuration instance.
@@ -170,9 +208,11 @@ def folder_processor_from_config(config: AppConfig) -> FolderProcessor:
     """
     client = graph_client_from_config(config)
     delta = delta_processor_from_config(client, config)
+    describer = anthropic_describer_from_config(config)
     return FolderProcessor(
         delta_processor=delta,
         graph_client=client,
         drive_user=config.drive_user,
+        describer=describer,
         folder_description_filename=config.folder_description_filename,
     )

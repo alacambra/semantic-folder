@@ -19,11 +19,13 @@ class AppConfig:
     tenant_id: str
     drive_user: str
     storage_connection_string: str
+    anthropic_api_key: str
 
     # Domain constants — defaults provided, overridable via env
     delta_container: str = "semantic-folder-state"
     delta_blob: str = "delta-token/current.txt"
     folder_description_filename: str = "folder_description.md"
+    anthropic_model: str = "claude-haiku-4-5-20251001"
 
 
 def load_config() -> AppConfig:
@@ -35,11 +37,13 @@ def load_config() -> AppConfig:
         SF_TENANT_ID: Azure AD tenant ID.
         SF_DRIVE_USER: UPN or object ID of the OneDrive user to poll.
         AzureWebJobsStorage: Azure Storage account connection string.
+        SF_ANTHROPIC_API_KEY: Anthropic API key for AI description generation.
 
     Optional environment variables (with defaults):
         SF_DELTA_CONTAINER: Blob container for delta token storage.
         SF_DELTA_BLOB: Blob path for the delta token file.
         SF_FOLDER_DESCRIPTION_FILENAME: Name of the generated description file.
+        SF_ANTHROPIC_MODEL: Anthropic model identifier (default: claude-haiku-4-5-20251001).
 
     Returns:
         Configured AppConfig instance.
@@ -50,9 +54,11 @@ def load_config() -> AppConfig:
         tenant_id=os.environ["SF_TENANT_ID"],
         drive_user=os.environ["SF_DRIVE_USER"],
         storage_connection_string=os.environ["AzureWebJobsStorage"],  # noqa: SIM112
+        anthropic_api_key=os.environ["SF_ANTHROPIC_API_KEY"],
         delta_container=os.environ.get("SF_DELTA_CONTAINER", "semantic-folder-state"),
         delta_blob=os.environ.get("SF_DELTA_BLOB", "delta-token/current.txt"),
         folder_description_filename=os.environ.get(
             "SF_FOLDER_DESCRIPTION_FILENAME", "folder_description.md"
         ),
+        anthropic_model=os.environ.get("SF_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
     )

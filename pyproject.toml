@@ -9,6 +9,7 @@ dependencies = [
     "azure-functions>=1.21",
     "msal>=1.31",
     "azure-storage-blob>=12.23",
+    "anthropic>=0.43",
 ]
 
 [tool.poetry]

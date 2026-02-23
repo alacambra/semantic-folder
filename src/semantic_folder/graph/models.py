@@ -36,3 +36,4 @@ class FolderListing:
     folder_id: str
     folder_path: str
     files: list[str] = field(default_factory=list)
+    file_ids: list[str] = field(default_factory=list)

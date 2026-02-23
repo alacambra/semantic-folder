@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**semantic-folder** is an Azure Functions (Python v2) application that auto-generates AI-powered folder descriptions for OneDrive via Microsoft Graph API. It runs on a 5-minute timer, detects file changes via the Graph Delta API, and will generate descriptions using AI (IT-4, not yet implemented).
+**semantic-folder** is an Azure Functions (Python v2) application that auto-generates AI-powered folder descriptions for OneDrive via Microsoft Graph API. It runs on a daily timer, detects file changes via the Graph Delta API, and generates AI-powered descriptions using the Anthropic API (Claude 3.5 Haiku).
 
 ## Commands
 
@@ -30,15 +30,19 @@ Three-layer design with dependency injection throughout:
 ```
 functions/          → Azure Function entry points (timer_trigger, http_trigger)
     ↓
-orchestration/      → Business logic (FolderProcessor: delta → resolve → enumerate)
+orchestration/      → Business logic (FolderProcessor: delta → resolve → enumerate → describe → upload)
     ↓
+description/        → AI description generation (AnthropicDescriber, generator, models)
 graph/              → Infrastructure adapters (GraphClient, DeltaProcessor, models)
 ```
 
 - **config.py** — `AppConfig` frozen dataclass, loaded from env vars via `load_config()`
-- **graph/client.py** — `GraphClient` wraps MSAL client-credentials flow + Graph API HTTP calls
+- **graph/client.py** — `GraphClient` wraps MSAL client-credentials flow + Graph API HTTP calls (`get`, `get_content`, `put_content`)
 - **graph/delta.py** — `DeltaProcessor` handles Delta API pagination, blob-stored delta tokens, loop prevention (filters out `folder_description.md`-only changes)
 - **graph/models.py** — `DriveItem`, `FolderListing` dataclasses with Graph API field constants
+- **description/describer.py** — `AnthropicDescriber` wraps the Anthropic Messages API for file summarization and folder classification
+- **description/generator.py** — `generate_description()` coordinates describer calls to produce `FolderDescription` from `FolderListing`
+- **description/models.py** — `FileDescription`, `FolderDescription` dataclasses with Markdown serialization
 - **orchestration/processor.py** — `FolderProcessor` orchestrates the full pipeline; `process_delta()` is the main entry point
 - **functions/timer_trigger.py** — Wires everything via `folder_processor_from_config(config)`
 
@@ -69,14 +73,14 @@ Each module provides a `*_from_config()` factory function for production wiring.
 ## Testing
 
 - Tests mirror `src/` structure under `tests/unit/`
-- All external I/O (MSAL, BlobServiceClient, Graph HTTP) is mocked
+- All external I/O (MSAL, BlobServiceClient, Graph HTTP, Anthropic API) is mocked
 - Integration tests in `tests/integration/` skip via `@pytest.mark.skipif` when credentials absent
 - Coverage target: maintain ≥90%
 
 ## Environment Variables
 
-Required: `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `SF_TENANT_ID`, `SF_DRIVE_USER`, `AzureWebJobsStorage`
-Optional (with defaults): `SF_DELTA_CONTAINER`, `SF_DELTA_BLOB`, `SF_FOLDER_DESCRIPTION_FILENAME`
+Required: `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `SF_TENANT_ID`, `SF_DRIVE_USER`, `AzureWebJobsStorage`, `SF_ANTHROPIC_API_KEY`
+Optional (with defaults): `SF_DELTA_CONTAINER`, `SF_DELTA_BLOB`, `SF_FOLDER_DESCRIPTION_FILENAME`, `SF_ANTHROPIC_MODEL`
 
 See `.env.example` for the full template.
 
@@ -86,4 +90,4 @@ Terraform in `infra/` deploys to Azure (germanywestcentral): Resource Group, Sto
 
 ## Iteration Process
 
-Development follows numbered iterations in `iterations/`. Each has an input spec (`it-N.in.md`) and completion report (`it-N.out.md`). Currently at IT-3 complete; IT-4 (AI description generation) is next. The `put_content()` method in `GraphClient` is stubbed with `NotImplementedError` awaiting IT-4.
+Development follows numbered iterations in `iterations/`. Each has an input spec (`it-N.in.md`) and completion report (`it-N.out.md`). Currently at IT-5 complete. The system now generates AI-powered folder descriptions using the Anthropic API.

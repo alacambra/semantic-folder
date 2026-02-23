@@ -6,7 +6,12 @@ status: Ready
 purpose: Implement the placeholder description pipeline — generate and upload folder_description.md to OneDrive
 audience: [Developers, reviewers]
 dependencies: [IT-3-IN]
-review_triggers: [Markdown format changes, Graph API upload contract changes, new dataclass fields]
+review_triggers:
+  [
+    Markdown format changes,
+    Graph API upload contract changes,
+    new dataclass fields,
+  ]
 ---
 
 # Iteration 4: Placeholder Description Pipeline
@@ -41,7 +46,7 @@ The Azure AD App Registration must have `Files.ReadWrite.All` application permis
 ### Out of Scope
 
 - AI content generation -- placeholder text only in this iteration
-- AI provider integration (OpenAI, Azure OpenAI, etc.) 
+- AI provider integration (OpenAI, Azure OpenAI, etc.)
 - File content reading from OneDrive (needed for AI summarization)
 - Terraform / infrastructure changes -- no new Azure resources needed
 - New environment variables -- `SF_FOLDER_DESCRIPTION_FILENAME` already exists in `AppConfig`
@@ -55,6 +60,7 @@ The Azure AD App Registration must have `Files.ReadWrite.All` application permis
 Replace the `NotImplementedError` stub at `src/semantic_folder/graph/client.py:106-125` with a real PUT request.
 
 **Current stub:**
+
 ```python
 def put_content(
     self,
@@ -66,6 +72,7 @@ def put_content(
 ```
 
 **Implementation:**
+
 ```python
 def put_content(
     self,
@@ -108,6 +115,7 @@ def put_content(
 ```
 
 **Upload path pattern used by callers:**
+
 ```
 /users/{drive_user}/drive/items/{folder_id}:/{filename}:/content
 ```
@@ -180,6 +188,7 @@ class FolderDescription:
 ```
 
 **Output example:**
+
 ```markdown
 ---
 folder_path: /drive/root:/Customers/Nexplore
@@ -246,6 +255,7 @@ def generate_description(listing: FolderListing) -> FolderDescription:
 Wire description generation and upload into the delta processing pipeline.
 
 **Changes to `FolderProcessor.__init__`:**
+
 ```python
 def __init__(
     self,
@@ -259,6 +269,7 @@ def __init__(
 Add `folder_description_filename` parameter (sourced from `AppConfig.folder_description_filename`).
 
 **New method `upload_description`:**
+
 ```python
 def upload_description(self, listing: FolderListing) -> None:
     """Generate a placeholder description and upload it to OneDrive.
@@ -302,6 +313,7 @@ def process_delta(self) -> list[FolderListing]:
 ```
 
 **Update `folder_processor_from_config`:**
+
 ```python
 def folder_processor_from_config(config: AppConfig) -> FolderProcessor:
     client = graph_client_from_config(config)
@@ -355,6 +367,7 @@ Empty `__init__.py` for the new description package.
 - Test `folder_processor_from_config()` passes `folder_description_filename` from config
 
 **Directory structure for new tests:**
+
 ```
 tests/
   unit/
@@ -396,16 +409,16 @@ tests/
 
 ### Skills reviewed
 
-| Skill | Relevance |
-| ----- | --------- |
-| architectural-requirements/layer-responsibilities | `description/` is a domain-adjacent module (pure data + pure function); `orchestration/` coordinates it with the `graph/` adapter -- no cross-layer leakage |
-| architectural-requirements/interface-design | `generate_description()` is a pure function with a stable interface (`FolderListing -> FolderDescription`); constructor injection for `folder_description_filename` on `FolderProcessor` |
-| architectural-requirements/error-handling | `put_content()` raises `GraphApiError` consistent with `get()` -- same error hierarchy; upload failures propagate to caller (timer/HTTP trigger) |
-| architectural-requirements/logging | Upload activity logged at INFO with structured fields (`folder_path`, `file_count`); no file content or tokens in logs |
-| architectural-requirements/testing | All new code has unit tests; `put_content()` and `generate_description()` mocked in orchestration tests; test structure mirrors source |
-| architectural-requirements/configuration | No new env vars; `folder_description_filename` already in `AppConfig`; no module reads `os.environ` directly |
-| architectural-requirements/security-architecture | No secrets or file content logged; `put_content()` uses the same Bearer token flow as `get()`; no new credential paths |
-| architectural-requirements/data-flow-architecture | Data flow is explicit: `FolderListing` -> `generate_description()` -> `FolderDescription` -> `to_markdown()` -> bytes -> `put_content()` |
+| Skill                                             | Relevance                                                                                                                                                                                |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| architectural-requirements/layer-responsibilities | `description/` is a domain-adjacent module (pure data + pure function); `orchestration/` coordinates it with the `graph/` adapter -- no cross-layer leakage                              |
+| architectural-requirements/interface-design       | `generate_description()` is a pure function with a stable interface (`FolderListing -> FolderDescription`); constructor injection for `folder_description_filename` on `FolderProcessor` |
+| architectural-requirements/error-handling         | `put_content()` raises `GraphApiError` consistent with `get()` -- same error hierarchy; upload failures propagate to caller (timer/HTTP trigger)                                         |
+| architectural-requirements/logging                | Upload activity logged at INFO with structured fields (`folder_path`, `file_count`); no file content or tokens in logs                                                                   |
+| architectural-requirements/testing                | All new code has unit tests; `put_content()` and `generate_description()` mocked in orchestration tests; test structure mirrors source                                                   |
+| architectural-requirements/configuration          | No new env vars; `folder_description_filename` already in `AppConfig`; no module reads `os.environ` directly                                                                             |
+| architectural-requirements/security-architecture  | No secrets or file content logged; `put_content()` uses the same Bearer token flow as `get()`; no new credential paths                                                                   |
+| architectural-requirements/data-flow-architecture | Data flow is explicit: `FolderListing` -> `generate_description()` -> `FolderDescription` -> `to_markdown()` -> bytes -> `put_content()`                                                 |
 
 ### Findings
 

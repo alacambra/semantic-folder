@@ -103,6 +103,39 @@ class GraphClient:
                 detail = exc.reason
             raise GraphApiError(exc.code, detail) from exc
 
+    def get_content(self, path: str) -> bytes:
+        """Perform an authenticated GET request to download raw content.
+
+        Args:
+            path: URL path relative to BASE_URL (must start with '/').
+
+        Returns:
+            Raw response bytes.
+
+        Raises:
+            GraphAuthError: If token acquisition fails.
+            GraphApiError: If the API returns a non-2xx status code.
+        """
+        token = self._acquire_token()
+        url = f"{GRAPH_BASE_URL}{path}"
+        req = urllib_request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+            },
+            method="GET",
+        )
+        try:
+            with urllib_request.urlopen(req) as resp:
+                return resp.read()  # type: ignore[no-any-return]
+        except HTTPError as exc:
+            raw = exc.read()
+            try:
+                detail = json.loads(raw).get("error", {}).get("message", exc.reason)
+            except Exception:
+                detail = exc.reason
+            raise GraphApiError(exc.code, detail) from exc
+
     def put_content(
         self,
         path: str,

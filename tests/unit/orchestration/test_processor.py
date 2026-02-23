@@ -13,16 +13,20 @@ from semantic_folder.orchestration.processor import (
 # ---------------------------------------------------------------------------
 
 
-def _make_processor() -> tuple[FolderProcessor, MagicMock, MagicMock]:
-    """Return (processor, mock_delta_processor, mock_graph_client)."""
+def _make_processor() -> tuple[FolderProcessor, MagicMock, MagicMock, MagicMock]:
+    """Return (processor, mock_delta_processor, mock_graph_client, mock_describer)."""
     mock_delta = MagicMock()
     mock_graph = MagicMock()
+    mock_describer = MagicMock()
+    mock_describer.classify_folder.return_value = "project-docs"
+    mock_describer.summarize_file.side_effect = lambda name, content: f"Summary of {name}"
     processor = FolderProcessor(
         delta_processor=mock_delta,
         graph_client=mock_graph,
         drive_user="testuser@contoso.onmicrosoft.com",
+        describer=mock_describer,
     )
-    return processor, mock_delta, mock_graph
+    return processor, mock_delta, mock_graph, mock_describer
 
 
 def _file_item(
@@ -70,7 +74,7 @@ def _deleted_item(id: str = "del-1", parent_id: str = "parent-1") -> DriveItem:
 
 class TestResolveFolders:
     def test_returns_unique_parent_ids_from_file_items(self) -> None:
-        processor, _, _ = _make_processor()
+        processor, _, _, _ = _make_processor()
 
         items = [
             _file_item(id="i1", parent_id="p1"),
@@ -83,7 +87,7 @@ class TestResolveFolders:
         assert sorted(result) == ["p1", "p2"]
 
     def test_excludes_folder_items(self) -> None:
-        processor, _, _ = _make_processor()
+        processor, _, _, _ = _make_processor()
 
         items = [
             _folder_item(id="f1", parent_id="root"),
@@ -96,7 +100,7 @@ class TestResolveFolders:
         assert "root" not in result
 
     def test_excludes_deleted_items(self) -> None:
-        processor, _, _ = _make_processor()
+        processor, _, _, _ = _make_processor()
 
         items = [
             _deleted_item(id="d1", parent_id="p-deleted"),
@@ -109,7 +113,7 @@ class TestResolveFolders:
         assert "p-deleted" not in result
 
     def test_returns_empty_list_for_no_file_items(self) -> None:
-        processor, _, _ = _make_processor()
+        processor, _, _, _ = _make_processor()
 
         items = [
             _folder_item(),
@@ -121,7 +125,7 @@ class TestResolveFolders:
         assert result == []
 
     def test_preserves_insertion_order(self) -> None:
-        processor, _, _ = _make_processor()
+        processor, _, _, _ = _make_processor()
 
         items = [
             _file_item(id="i1", parent_id="p3"),
@@ -141,7 +145,7 @@ class TestResolveFolders:
 
 class TestListFolder:
     def test_returns_folder_listing_with_file_names(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
 
         mock_graph.get.return_value = {
             "value": [
@@ -164,8 +168,54 @@ class TestListFolder:
         assert result.folder_path == "/drive/root:/Projects"
         assert sorted(result.files) == ["notes.txt", "report.docx"]
 
+    def test_populates_file_ids_from_graph_response(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+
+        mock_graph.get.return_value = {
+            "value": [
+                {
+                    "id": "child-1",
+                    "name": "report.docx",
+                    "parentReference": {"id": "folder-99", "path": "/drive/root:/Projects"},
+                },
+                {
+                    "id": "child-2",
+                    "name": "notes.txt",
+                    "parentReference": {"id": "folder-99", "path": "/drive/root:/Projects"},
+                },
+            ]
+        }
+
+        result = processor.list_folder("folder-99")
+
+        assert result.file_ids == ["child-1", "child-2"]
+
+    def test_excludes_sub_folders_from_file_ids(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+
+        mock_graph.get.return_value = {
+            "value": [
+                {
+                    "id": "sub-1",
+                    "name": "SubFolder",
+                    "folder": {},
+                    "parentReference": {"id": "folder-1", "path": "/drive/root:/Docs"},
+                },
+                {
+                    "id": "file-1",
+                    "name": "doc.docx",
+                    "parentReference": {"id": "folder-1", "path": "/drive/root:/Docs"},
+                },
+            ]
+        }
+
+        result = processor.list_folder("folder-1")
+
+        assert result.files == ["doc.docx"]
+        assert result.file_ids == ["file-1"]
+
     def test_excludes_sub_folders_from_files_list(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
 
         mock_graph.get.return_value = {
             "value": [
@@ -188,7 +238,7 @@ class TestListFolder:
         assert result.files == ["doc.docx"]
 
     def test_calls_correct_graph_endpoint(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
         mock_graph.get.return_value = {"value": []}
 
         processor.list_folder("specific-folder-id")
@@ -198,16 +248,17 @@ class TestListFolder:
         )
 
     def test_empty_folder_returns_empty_files_list(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
         mock_graph.get.return_value = {"value": []}
 
         result = processor.list_folder("empty-folder")
 
         assert result.files == []
+        assert result.file_ids == []
         assert result.folder_path == ""
 
     def test_folder_path_from_first_child_parent_reference(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
 
         mock_graph.get.return_value = {
             "value": [
@@ -225,13 +276,99 @@ class TestListFolder:
 
 
 # ---------------------------------------------------------------------------
+# read_file_contents tests
+# ---------------------------------------------------------------------------
+
+
+class TestReadFileContents:
+    def test_calls_get_content_for_each_file_id(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.return_value = b"file data"
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/p",
+            files=["a.txt", "b.txt"],
+            file_ids=["id-a", "id-b"],
+        )
+
+        processor.read_file_contents(listing)
+
+        assert mock_graph.get_content.call_count == 2
+        mock_graph.get_content.assert_any_call(
+            "/users/testuser@contoso.onmicrosoft.com/drive/items/id-a/content"
+        )
+        mock_graph.get_content.assert_any_call(
+            "/users/testuser@contoso.onmicrosoft.com/drive/items/id-b/content"
+        )
+
+    def test_returns_mapping_of_filename_to_bytes(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.side_effect = [b"content-a", b"content-b"]
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/p",
+            files=["a.txt", "b.txt"],
+            file_ids=["id-a", "id-b"],
+        )
+
+        result = processor.read_file_contents(listing)
+
+        assert result == {"a.txt": b"content-a", "b.txt": b"content-b"}
+
+    def test_returns_empty_bytes_on_download_failure(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.side_effect = Exception("Network error")
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/p",
+            files=["fail.txt"],
+            file_ids=["id-fail"],
+        )
+
+        result = processor.read_file_contents(listing)
+
+        assert result == {"fail.txt": b""}
+
+    def test_logs_warning_on_download_failure(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.side_effect = Exception("Network error")
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/p",
+            files=["fail.txt"],
+            file_ids=["id-fail"],
+        )
+
+        with patch("semantic_folder.orchestration.processor.logger") as mock_logger:
+            processor.read_file_contents(listing)
+            mock_logger.warning.assert_called_once()
+            call_args = mock_logger.warning.call_args
+            assert "fail.txt" in str(call_args)
+            assert "id-fail" in str(call_args)
+
+    def test_empty_listing_returns_empty_dict(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+
+        listing = FolderListing(folder_id="f1", folder_path="/p")
+
+        result = processor.read_file_contents(listing)
+
+        assert result == {}
+        mock_graph.get_content.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # process_delta tests
 # ---------------------------------------------------------------------------
 
 
 class TestProcessDelta:
     def test_calls_components_in_correct_order(self) -> None:
-        processor, mock_delta, mock_graph = _make_processor()
+        processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = "existing-token"
         mock_delta.fetch_changes.return_value = (
@@ -247,6 +384,7 @@ class TestProcessDelta:
                 }
             ]
         }
+        mock_graph.get_content.return_value = b"file data"
 
         results = processor.process_delta()
 
@@ -261,7 +399,7 @@ class TestProcessDelta:
 
     def test_saves_token_after_listing_all_folders(self) -> None:
         """Token must be saved even when multiple folders are processed."""
-        processor, mock_delta, mock_graph = _make_processor()
+        processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = None
         mock_delta.fetch_changes.return_value = (
@@ -278,7 +416,7 @@ class TestProcessDelta:
         mock_delta.save_delta_token.assert_called_once_with("token-after")
 
     def test_returns_empty_list_when_no_changes(self) -> None:
-        processor, mock_delta, _ = _make_processor()
+        processor, mock_delta, _, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = "tok"
         mock_delta.fetch_changes.return_value = ([], "tok-new")
@@ -289,7 +427,7 @@ class TestProcessDelta:
 
     def test_correct_folder_listing_contents(self) -> None:
         """FolderListing must carry correct path and files from Graph response."""
-        processor, mock_delta, mock_graph = _make_processor()
+        processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = None
         mock_delta.fetch_changes.return_value = (
@@ -310,6 +448,7 @@ class TestProcessDelta:
                 },
             ]
         }
+        mock_graph.get_content.return_value = b"data"
 
         results = processor.process_delta()
 
@@ -321,7 +460,7 @@ class TestProcessDelta:
 
     def test_uploads_descriptions_before_saving_token(self) -> None:
         """Descriptions must be uploaded before the delta token is saved."""
-        processor, mock_delta, mock_graph = _make_processor()
+        processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = "tok"
         mock_delta.fetch_changes.return_value = (
@@ -337,6 +476,7 @@ class TestProcessDelta:
                 }
             ]
         }
+        mock_graph.get_content.return_value = b"data"
 
         call_order: list[str] = []
         mock_graph.put_content.side_effect = lambda *a, **kw: call_order.append("put_content")
@@ -350,7 +490,7 @@ class TestProcessDelta:
 
     def test_uploads_description_for_each_listing(self) -> None:
         """Each folder listing should trigger a put_content call."""
-        processor, mock_delta, mock_graph = _make_processor()
+        processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = None
         mock_delta.fetch_changes.return_value = (
@@ -374,12 +514,14 @@ class TestProcessDelta:
 
 class TestUploadDescription:
     def test_calls_put_content_with_correct_path(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.return_value = b"content"
 
         listing = FolderListing(
             folder_id="folder-abc",
             folder_path="/drive/root:/Docs",
             files=["report.pdf"],
+            file_ids=["id-report"],
         )
 
         processor.upload_description(listing)
@@ -392,17 +534,42 @@ class TestUploadDescription:
             ":/folder_description.md:/content"
         )
 
+    def test_reads_file_contents_then_generates_description(self) -> None:
+        processor, _, mock_graph, mock_describer = _make_processor()
+        mock_graph.get_content.side_effect = [b"report data"]
+
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/drive/root:/Docs",
+            files=["report.pdf"],
+            file_ids=["id-report"],
+        )
+
+        processor.upload_description(listing)
+
+        # Verify get_content was called for the file
+        mock_graph.get_content.assert_called_once_with(
+            "/users/testuser@contoso.onmicrosoft.com/drive/items/id-report/content"
+        )
+        # Verify describer was called with the content
+        mock_describer.summarize_file.assert_called_once_with("report.pdf", b"report data")
+        mock_describer.classify_folder.assert_called_once()
+
     def test_uses_configured_filename(self) -> None:
         mock_delta = MagicMock()
         mock_graph = MagicMock()
+        mock_describer = MagicMock()
+        mock_describer.classify_folder.return_value = "docs"
+        mock_describer.summarize_file.return_value = "summary"
         processor = FolderProcessor(
             delta_processor=mock_delta,
             graph_client=mock_graph,
             drive_user="user@example.com",
+            describer=mock_describer,
             folder_description_filename="custom_desc.md",
         )
 
-        listing = FolderListing(folder_id="f1", folder_path="/p", files=[])
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=[], file_ids=[])
 
         processor.upload_description(listing)
 
@@ -410,12 +577,14 @@ class TestUploadDescription:
         assert ":/custom_desc.md:/content" in path
 
     def test_content_is_utf8_encoded_markdown(self) -> None:
-        processor, _, mock_graph = _make_processor()
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get_content.return_value = b"data"
 
         listing = FolderListing(
             folder_id="f1",
             folder_path="/drive/root:/Test",
             files=["a.txt"],
+            file_ids=["id-a"],
         )
 
         processor.upload_description(listing)
@@ -425,7 +594,6 @@ class TestUploadDescription:
         text = content.decode("utf-8")
         assert "---" in text
         assert "## a.txt" in text
-        assert "[a.txt-description]" in text
 
 
 # ---------------------------------------------------------------------------
@@ -434,10 +602,11 @@ class TestUploadDescription:
 
 
 class TestFolderProcessorFromConfig:
+    @patch("semantic_folder.orchestration.processor.anthropic_describer_from_config")
     @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
     @patch("semantic_folder.orchestration.processor.graph_client_from_config")
     def test_passes_folder_description_filename(
-        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock
+        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock, mock_adfc: MagicMock
     ) -> None:
         config = MagicMock()
         config.drive_user = "user@example.com"
@@ -446,3 +615,18 @@ class TestFolderProcessorFromConfig:
         processor = folder_processor_from_config(config)
 
         assert processor._folder_description_filename == "custom.md"
+
+    @patch("semantic_folder.orchestration.processor.anthropic_describer_from_config")
+    @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
+    @patch("semantic_folder.orchestration.processor.graph_client_from_config")
+    def test_creates_describer_from_config(
+        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock, mock_adfc: MagicMock
+    ) -> None:
+        config = MagicMock()
+        config.drive_user = "user@example.com"
+        config.folder_description_filename = "desc.md"
+
+        processor = folder_processor_from_config(config)
+
+        mock_adfc.assert_called_once_with(config)
+        assert processor._describer == mock_adfc.return_value

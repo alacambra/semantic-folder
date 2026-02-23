@@ -151,6 +151,80 @@ class TestGraphClientGet:
 
 
 # ---------------------------------------------------------------------------
+# get_content() tests
+# ---------------------------------------------------------------------------
+
+
+class TestGraphClientGetContent:
+    def test_get_content_sends_get_with_correct_url_and_bearer_token(self) -> None:
+        client = _make_client()
+        _mock_token_success(client)
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = b"raw file bytes here"
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("semantic_folder.graph.client.urllib_request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = mock_response
+            result = client.get_content("/users/u/drive/items/file-1/content")
+
+        assert result == b"raw file bytes here"
+        req = mock_urlopen.call_args[0][0]
+        assert req.full_url == (
+            "https://graph.microsoft.com/v1.0/users/u/drive/items/file-1/content"
+        )
+        assert req.get_method() == "GET"
+        assert req.get_header("Authorization") == "Bearer fake-token-abc"
+
+    def test_get_content_returns_raw_bytes(self) -> None:
+        client = _make_client()
+        _mock_token_success(client)
+
+        binary_data = bytes(range(256))
+        mock_response = MagicMock()
+        mock_response.read.return_value = binary_data
+        mock_response.__enter__ = lambda s: s
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("semantic_folder.graph.client.urllib_request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = mock_response
+            result = client.get_content("/path")
+
+        assert result == binary_data
+        assert isinstance(result, bytes)
+
+    def test_get_content_raises_graph_api_error_on_non_2xx(self) -> None:
+        client = _make_client()
+        _mock_token_success(client)
+
+        error_body = json.dumps({"error": {"message": "Item not found"}}).encode()
+        http_error = HTTPError(
+            url="https://graph.microsoft.com/v1.0/users/u/drive/items/bad/content",
+            code=404,
+            msg="Not Found",
+            hdrs=MagicMock(),  # type: ignore[arg-type]
+            fp=BytesIO(error_body),
+        )
+
+        with (
+            patch("semantic_folder.graph.client.urllib_request.urlopen", side_effect=http_error),
+            pytest.raises(GraphApiError) as exc_info,
+        ):
+            client.get_content("/users/u/drive/items/bad/content")
+
+        assert exc_info.value.status_code == 404
+        assert "Item not found" in exc_info.value.message
+
+    def test_get_content_raises_auth_error_when_token_fails(self) -> None:
+        client = _make_client()
+        _mock_token_failure(client)
+
+        with pytest.raises(GraphAuthError):
+            client.get_content("/path")
+
+
+# ---------------------------------------------------------------------------
 # put_content() tests
 # ---------------------------------------------------------------------------
 

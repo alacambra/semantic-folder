@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from semantic_folder.description.cache import SummaryCache
 from semantic_folder.graph.models import DriveItem, FolderListing
 from semantic_folder.orchestration.processor import (
     FolderProcessor,
@@ -601,12 +602,100 @@ class TestUploadDescription:
 # ---------------------------------------------------------------------------
 
 
+class TestFolderProcessorAcceptsCache:
+    def test_accepts_optional_cache_parameter(self) -> None:
+        mock_cache = MagicMock(spec=SummaryCache)
+        processor = FolderProcessor(
+            delta_processor=MagicMock(),
+            graph_client=MagicMock(),
+            drive_user="user@contoso.com",
+            describer=MagicMock(),
+            cache=mock_cache,
+        )
+        assert processor._cache is mock_cache
+
+    def test_cache_defaults_to_none(self) -> None:
+        processor = FolderProcessor(
+            delta_processor=MagicMock(),
+            graph_client=MagicMock(),
+            drive_user="user@contoso.com",
+            describer=MagicMock(),
+        )
+        assert processor._cache is None
+
+
+class TestUploadDescriptionWithCache:
+    @patch("semantic_folder.orchestration.processor.generate_description")
+    def test_passes_cache_to_generate_description(self, mock_gen_desc: MagicMock) -> None:
+        mock_cache = MagicMock(spec=SummaryCache)
+        mock_graph = MagicMock()
+        mock_graph.get_content.return_value = b"data"
+        mock_describer = MagicMock()
+        mock_describer.classify_folder.return_value = "docs"
+        mock_describer.summarize_file.return_value = "summary"
+
+        # Set up generate_description mock return
+        mock_desc = MagicMock()
+        mock_desc.to_markdown.return_value = "# markdown"
+        mock_desc.files = []
+        mock_gen_desc.return_value = mock_desc
+
+        processor = FolderProcessor(
+            delta_processor=MagicMock(),
+            graph_client=mock_graph,
+            drive_user="user@contoso.com",
+            describer=mock_describer,
+            cache=mock_cache,
+        )
+        listing = FolderListing(
+            folder_id="f1", folder_path="/p", files=["a.txt"], file_ids=["id-a"]
+        )
+
+        processor.upload_description(listing)
+
+        mock_gen_desc.assert_called_once()
+        call_kwargs = mock_gen_desc.call_args
+        # Fourth positional arg (or keyword) is the cache
+        assert call_kwargs[0][3] is mock_cache
+
+    @patch("semantic_folder.orchestration.processor.generate_description")
+    def test_passes_none_cache_when_not_configured(self, mock_gen_desc: MagicMock) -> None:
+        mock_graph = MagicMock()
+        mock_graph.get_content.return_value = b"data"
+
+        mock_desc = MagicMock()
+        mock_desc.to_markdown.return_value = "# markdown"
+        mock_desc.files = []
+        mock_gen_desc.return_value = mock_desc
+
+        processor = FolderProcessor(
+            delta_processor=MagicMock(),
+            graph_client=mock_graph,
+            drive_user="user@contoso.com",
+            describer=MagicMock(),
+        )
+        listing = FolderListing(
+            folder_id="f1", folder_path="/p", files=["a.txt"], file_ids=["id-a"]
+        )
+
+        processor.upload_description(listing)
+
+        mock_gen_desc.assert_called_once()
+        call_kwargs = mock_gen_desc.call_args
+        assert call_kwargs[0][3] is None
+
+
 class TestFolderProcessorFromConfig:
+    @patch("semantic_folder.orchestration.processor.summary_cache_from_config")
     @patch("semantic_folder.orchestration.processor.anthropic_describer_from_config")
     @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
     @patch("semantic_folder.orchestration.processor.graph_client_from_config")
     def test_passes_folder_description_filename(
-        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock, mock_adfc: MagicMock
+        self,
+        mock_gcfc: MagicMock,
+        mock_dpfc: MagicMock,
+        mock_adfc: MagicMock,
+        mock_scfc: MagicMock,
     ) -> None:
         config = MagicMock()
         config.drive_user = "user@example.com"
@@ -616,11 +705,16 @@ class TestFolderProcessorFromConfig:
 
         assert processor._folder_description_filename == "custom.md"
 
+    @patch("semantic_folder.orchestration.processor.summary_cache_from_config")
     @patch("semantic_folder.orchestration.processor.anthropic_describer_from_config")
     @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
     @patch("semantic_folder.orchestration.processor.graph_client_from_config")
     def test_creates_describer_from_config(
-        self, mock_gcfc: MagicMock, mock_dpfc: MagicMock, mock_adfc: MagicMock
+        self,
+        mock_gcfc: MagicMock,
+        mock_dpfc: MagicMock,
+        mock_adfc: MagicMock,
+        mock_scfc: MagicMock,
     ) -> None:
         config = MagicMock()
         config.drive_user = "user@example.com"
@@ -630,3 +724,23 @@ class TestFolderProcessorFromConfig:
 
         mock_adfc.assert_called_once_with(config)
         assert processor._describer == mock_adfc.return_value
+
+    @patch("semantic_folder.orchestration.processor.summary_cache_from_config")
+    @patch("semantic_folder.orchestration.processor.anthropic_describer_from_config")
+    @patch("semantic_folder.orchestration.processor.delta_processor_from_config")
+    @patch("semantic_folder.orchestration.processor.graph_client_from_config")
+    def test_creates_cache_from_config(
+        self,
+        mock_gcfc: MagicMock,
+        mock_dpfc: MagicMock,
+        mock_adfc: MagicMock,
+        mock_scfc: MagicMock,
+    ) -> None:
+        config = MagicMock()
+        config.drive_user = "user@example.com"
+        config.folder_description_filename = "desc.md"
+
+        processor = folder_processor_from_config(config)
+
+        mock_scfc.assert_called_once_with(config)
+        assert processor._cache == mock_scfc.return_value

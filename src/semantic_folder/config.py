@@ -27,6 +27,8 @@ class AppConfig:
     folder_description_filename: str = "folder_description.md"
     anthropic_model: str = "claude-haiku-4-5-20251001"
     max_file_content_bytes: int = 8192
+    cache_container: str = "semantic-folder-state"
+    cache_blob_prefix: str = "summary-cache/"
 
 
 def load_config() -> AppConfig:
@@ -46,6 +48,8 @@ def load_config() -> AppConfig:
         SF_FOLDER_DESCRIPTION_FILENAME: Name of the generated description file.
         SF_ANTHROPIC_MODEL: Anthropic model identifier (default: claude-haiku-4-5-20251001).
         SF_MAX_FILE_CONTENT_BYTES: Max bytes to read per file for AI summarization (default: 8192).
+        SF_CACHE_CONTAINER: Blob container for summary cache storage.
+        SF_CACHE_BLOB_PREFIX: Blob prefix for cached summary paths.
 
     Returns:
         Configured AppConfig instance.
@@ -64,4 +68,6 @@ def load_config() -> AppConfig:
         ),
         anthropic_model=os.environ.get("SF_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         max_file_content_bytes=int(os.environ.get("SF_MAX_FILE_CONTENT_BYTES", "8192")),
+        cache_container=os.environ.get("SF_CACHE_CONTAINER", "semantic-folder-state"),
+        cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "summary-cache/"),
     )

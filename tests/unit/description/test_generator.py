@@ -3,7 +3,11 @@
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
-from semantic_folder.description.generator import generate_description
+from semantic_folder.description.cache import SummaryCache
+from semantic_folder.description.generator import (
+    _get_or_generate_summary,
+    generate_description,
+)
 from semantic_folder.description.models import FolderDescription
 from semantic_folder.graph.models import FolderListing
 
@@ -20,8 +24,13 @@ def _make_describer_mock() -> MagicMock:
     return mock
 
 
+def _make_cache_mock() -> MagicMock:
+    """Return a mock SummaryCache."""
+    return MagicMock(spec=SummaryCache)
+
+
 # ---------------------------------------------------------------------------
-# generate_description tests
+# generate_description tests (no cache)
 # ---------------------------------------------------------------------------
 
 
@@ -128,3 +137,148 @@ class TestGenerateDescription:
         describer = _make_describer_mock()
         result = generate_description(listing, describer, {})
         assert [f.filename for f in result.files] == ["z.txt", "a.txt", "m.txt"]
+
+
+# ---------------------------------------------------------------------------
+# generate_description tests (with cache)
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateDescriptionWithCache:
+    def test_without_cache_calls_summarize_for_all_files(self) -> None:
+        """Backward compat: cache=None still calls summarize_file() for every file."""
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt", "b.txt"])
+        describer = _make_describer_mock()
+        result = generate_description(
+            listing, describer, {"a.txt": b"aaa", "b.txt": b"bbb"}, cache=None
+        )
+        assert describer.summarize_file.call_count == 2
+        assert len(result.files) == 2
+
+    def test_cache_hit_skips_summarize_file(self) -> None:
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt"])
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = "Cached summary of a.txt"
+
+        result = generate_description(listing, describer, {"a.txt": b"content"}, cache=cache)
+
+        describer.summarize_file.assert_not_called()
+        assert result.files[0].summary == "Cached summary of a.txt"
+
+    def test_cache_miss_calls_summarize_and_stores(self) -> None:
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt"])
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = None
+
+        result = generate_description(listing, describer, {"a.txt": b"content"}, cache=cache)
+
+        describer.summarize_file.assert_called_once_with("a.txt", b"content")
+        cache.put.assert_called_once()
+        assert result.files[0].summary == "Summary of a.txt"
+
+    def test_does_not_cache_empty_content(self) -> None:
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=["empty.txt"])
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+
+        generate_description(listing, describer, {"empty.txt": b""}, cache=cache)
+
+        # Empty content bypasses cache entirely
+        cache.get.assert_not_called()
+        cache.put.assert_not_called()
+        describer.summarize_file.assert_called_once_with("empty.txt", b"")
+
+    def test_classify_folder_always_called_with_cache(self) -> None:
+        """classify_folder() is never cached — it must be called every time."""
+        listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt"])
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = "cached"
+
+        generate_description(listing, describer, {"a.txt": b"data"}, cache=cache)
+
+        describer.classify_folder.assert_called_once_with("/p", ["a.txt"])
+
+    def test_mixed_cache_hits_and_misses(self) -> None:
+        listing = FolderListing(
+            folder_id="f1",
+            folder_path="/p",
+            files=["cached.txt", "fresh.txt"],
+        )
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+
+        # First file is a hit, second is a miss
+        cache.get.side_effect = ["Cached summary", None]
+
+        result = generate_description(
+            listing,
+            describer,
+            {"cached.txt": b"old content", "fresh.txt": b"new content"},
+            cache=cache,
+        )
+
+        # Only fresh.txt should trigger summarize_file
+        describer.summarize_file.assert_called_once_with("fresh.txt", b"new content")
+        assert result.files[0].summary == "Cached summary"
+        assert result.files[1].summary == "Summary of fresh.txt"
+
+
+# ---------------------------------------------------------------------------
+# _get_or_generate_summary tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetOrGenerateSummary:
+    def test_no_cache_calls_summarize_directly(self) -> None:
+        describer = _make_describer_mock()
+        result = _get_or_generate_summary("a.txt", b"content", describer, cache=None)
+        describer.summarize_file.assert_called_once_with("a.txt", b"content")
+        assert result == "Summary of a.txt"
+
+    def test_cache_hit_returns_cached_and_skips_llm(self) -> None:
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = "From cache"
+
+        result = _get_or_generate_summary("a.txt", b"content", describer, cache)
+
+        describer.summarize_file.assert_not_called()
+        cache.put.assert_not_called()
+        assert result == "From cache"
+
+    def test_cache_miss_calls_llm_and_stores(self) -> None:
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = None
+
+        result = _get_or_generate_summary("a.txt", b"content", describer, cache)
+
+        describer.summarize_file.assert_called_once_with("a.txt", b"content")
+        content_hash = SummaryCache.content_hash(b"content")
+        cache.put.assert_called_once_with(content_hash, "Summary of a.txt")
+        assert result == "Summary of a.txt"
+
+    def test_empty_content_bypasses_cache(self) -> None:
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+
+        result = _get_or_generate_summary("a.txt", b"", describer, cache)
+
+        cache.get.assert_not_called()
+        cache.put.assert_not_called()
+        describer.summarize_file.assert_called_once_with("a.txt", b"")
+        assert result == "Summary of a.txt"
+
+    def test_computes_correct_content_hash(self) -> None:
+        describer = _make_describer_mock()
+        cache = _make_cache_mock()
+        cache.get.return_value = None
+
+        content = b"specific content bytes"
+        _get_or_generate_summary("a.txt", content, describer, cache)
+
+        expected_hash = SummaryCache.content_hash(content)
+        cache.get.assert_called_once_with(expected_hash)

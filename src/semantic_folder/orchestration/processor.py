@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from semantic_folder.description.cache import SummaryCache, summary_cache_from_config
 from semantic_folder.description.describer import (
     AnthropicDescriber,
     anthropic_describer_from_config,
@@ -39,6 +40,7 @@ class FolderProcessor:
         drive_user: str,
         describer: AnthropicDescriber,
         folder_description_filename: str = "folder_description.md",
+        cache: SummaryCache | None = None,
     ) -> None:
         """Initialise the folder processor.
 
@@ -48,12 +50,14 @@ class FolderProcessor:
             drive_user: UPN or object ID of the OneDrive user (same as DeltaProcessor).
             describer: AnthropicDescriber instance for AI description generation.
             folder_description_filename: Name of the description file to generate and upload.
+            cache: Optional SummaryCache for skipping redundant LLM calls.
         """
         self._delta = delta_processor
         self._graph = graph_client
         self._drive_user = drive_user
         self._describer = describer
         self._folder_description_filename = folder_description_filename
+        self._cache = cache
 
     def resolve_folders(self, items: list[DriveItem]) -> list[str]:
         """Deduplicate parent folder IDs from non-deleted, non-folder items.
@@ -148,7 +152,7 @@ class FolderProcessor:
             listing: FolderListing for the folder to describe.
         """
         file_contents = self.read_file_contents(listing)
-        description = generate_description(listing, self._describer, file_contents)
+        description = generate_description(listing, self._describer, file_contents, self._cache)
         content = description.to_markdown().encode("utf-8")
         path = (
             f"/users/{self._drive_user}/drive/items/{listing.folder_id}"
@@ -209,10 +213,12 @@ def folder_processor_from_config(config: AppConfig) -> FolderProcessor:
     client = graph_client_from_config(config)
     delta = delta_processor_from_config(client, config)
     describer = anthropic_describer_from_config(config)
+    cache = summary_cache_from_config(config)
     return FolderProcessor(
         delta_processor=delta,
         graph_client=client,
         drive_user=config.drive_user,
         describer=describer,
         folder_description_filename=config.folder_description_filename,
+        cache=cache,
     )

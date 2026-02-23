@@ -63,6 +63,28 @@ class TestAppConfig:
         )
         assert config.anthropic_model == "claude-3-opus-20240229"
 
+    def test_cache_container_has_default(self) -> None:
+        config = AppConfig(
+            client_id="cid",
+            client_secret="cs",
+            tenant_id="tid",
+            drive_user="u",
+            storage_connection_string="conn",
+            anthropic_api_key="sk-test",
+        )
+        assert config.cache_container == "semantic-folder-state"
+
+    def test_cache_blob_prefix_has_default(self) -> None:
+        config = AppConfig(
+            client_id="cid",
+            client_secret="cs",
+            tenant_id="tid",
+            drive_user="u",
+            storage_connection_string="conn",
+            anthropic_api_key="sk-test",
+        )
+        assert config.cache_blob_prefix == "summary-cache/"
+
 
 # ---------------------------------------------------------------------------
 # load_config tests
@@ -90,3 +112,25 @@ class TestLoadConfig:
         env = {k: v for k, v in _REQUIRED_ENV.items() if k != "SF_ANTHROPIC_API_KEY"}
         with patch.dict(os.environ, env, clear=True), pytest.raises(KeyError):
             load_config()
+
+    def test_reads_cache_container_from_env(self) -> None:
+        env = {**_REQUIRED_ENV, "SF_CACHE_CONTAINER": "custom-container"}
+        with patch.dict(os.environ, env, clear=False):
+            config = load_config()
+        assert config.cache_container == "custom-container"
+
+    def test_reads_cache_blob_prefix_from_env(self) -> None:
+        env = {**_REQUIRED_ENV, "SF_CACHE_BLOB_PREFIX": "custom-prefix/"}
+        with patch.dict(os.environ, env, clear=False):
+            config = load_config()
+        assert config.cache_blob_prefix == "custom-prefix/"
+
+    def test_cache_container_defaults_when_env_not_set(self) -> None:
+        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+            config = load_config()
+        assert config.cache_container == "semantic-folder-state"
+
+    def test_cache_blob_prefix_defaults_when_env_not_set(self) -> None:
+        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+            config = load_config()
+        assert config.cache_blob_prefix == "summary-cache/"

@@ -28,6 +28,13 @@
       "problemMatcher": []
     },
     {
+      "label": "trigger",
+      "type": "shell",
+      "command": "source .env.local && curl -X POST \"$SF_TRIGGER_URL\"",
+      "detail": "Trigger the HTTP endpoint for on-demand delta processing",
+      "problemMatcher": []
+    },
+    {
       "label": "transform-to-skill",
       "type": "shell",
       "command": "python3",

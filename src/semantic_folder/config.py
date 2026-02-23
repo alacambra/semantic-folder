@@ -29,6 +29,8 @@ class AppConfig:
     max_file_content_bytes: int = 8192
     cache_container: str = "semantic-folder-state"
     cache_blob_prefix: str = "summary-cache/"
+    anthropic_max_retries: int = 3
+    anthropic_request_delay: float = 1.0
 
 
 def load_config() -> AppConfig:
@@ -50,6 +52,8 @@ def load_config() -> AppConfig:
         SF_MAX_FILE_CONTENT_BYTES: Max bytes to read per file for AI summarization (default: 8192).
         SF_CACHE_CONTAINER: Blob container for summary cache storage.
         SF_CACHE_BLOB_PREFIX: Blob prefix for cached summary paths.
+        SF_ANTHROPIC_MAX_RETRIES: Max retry attempts for rate-limited requests (default: 3).
+        SF_ANTHROPIC_REQUEST_DELAY: Seconds to sleep before each API call (default: 1.0).
 
     Returns:
         Configured AppConfig instance.
@@ -70,4 +74,6 @@ def load_config() -> AppConfig:
         max_file_content_bytes=int(os.environ.get("SF_MAX_FILE_CONTENT_BYTES", "8192")),
         cache_container=os.environ.get("SF_CACHE_CONTAINER", "semantic-folder-state"),
         cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "summary-cache/"),
+        anthropic_max_retries=int(os.environ.get("SF_ANTHROPIC_MAX_RETRIES", "3")),
+        anthropic_request_delay=float(os.environ.get("SF_ANTHROPIC_REQUEST_DELAY", "1.0")),
     )

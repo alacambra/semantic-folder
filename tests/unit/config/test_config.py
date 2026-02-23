@@ -85,6 +85,28 @@ class TestAppConfig:
         )
         assert config.cache_blob_prefix == "summary-cache/"
 
+    def test_anthropic_max_retries_has_default(self) -> None:
+        config = AppConfig(
+            client_id="cid",
+            client_secret="cs",
+            tenant_id="tid",
+            drive_user="u",
+            storage_connection_string="conn",
+            anthropic_api_key="sk-test",
+        )
+        assert config.anthropic_max_retries == 3
+
+    def test_anthropic_request_delay_has_default(self) -> None:
+        config = AppConfig(
+            client_id="cid",
+            client_secret="cs",
+            tenant_id="tid",
+            drive_user="u",
+            storage_connection_string="conn",
+            anthropic_api_key="sk-test",
+        )
+        assert config.anthropic_request_delay == 1.0
+
 
 # ---------------------------------------------------------------------------
 # load_config tests
@@ -134,3 +156,25 @@ class TestLoadConfig:
         with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
             config = load_config()
         assert config.cache_blob_prefix == "summary-cache/"
+
+    def test_reads_anthropic_max_retries_from_env(self) -> None:
+        env = {**_REQUIRED_ENV, "SF_ANTHROPIC_MAX_RETRIES": "5"}
+        with patch.dict(os.environ, env, clear=False):
+            config = load_config()
+        assert config.anthropic_max_retries == 5
+
+    def test_anthropic_max_retries_defaults_when_env_not_set(self) -> None:
+        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+            config = load_config()
+        assert config.anthropic_max_retries == 3
+
+    def test_reads_anthropic_request_delay_from_env(self) -> None:
+        env = {**_REQUIRED_ENV, "SF_ANTHROPIC_REQUEST_DELAY": "2.5"}
+        with patch.dict(os.environ, env, clear=False):
+            config = load_config()
+        assert config.anthropic_request_delay == 2.5
+
+    def test_anthropic_request_delay_defaults_when_env_not_set(self) -> None:
+        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+            config = load_config()
+        assert config.anthropic_request_delay == 1.0

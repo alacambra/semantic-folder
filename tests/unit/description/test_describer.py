@@ -7,6 +7,8 @@ from anthropic.types import Message, TextBlock, Usage
 
 from semantic_folder.description.describer import (
     DEFAULT_MAX_FILE_CONTENT_BYTES,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_REQUEST_DELAY,
     AnthropicDescriber,
     _extract_docx_text,
     _file_extension,
@@ -18,12 +20,20 @@ from semantic_folder.description.describer import (
 # ---------------------------------------------------------------------------
 
 
-def _make_describer() -> tuple[AnthropicDescriber, MagicMock]:
-    """Return (describer, mock_anthropic_client)."""
+def _make_describer(
+    request_delay: float = 0.0,
+) -> tuple[AnthropicDescriber, MagicMock]:
+    """Return (describer, mock_anthropic_client).
+
+    Args:
+        request_delay: Inter-request delay; defaults to 0.0 for fast tests.
+    """
     with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
-        describer = AnthropicDescriber(api_key="test-key", model="test-model")
+        describer = AnthropicDescriber(
+            api_key="test-key", model="test-model", request_delay=request_delay
+        )
     return describer, mock_client
 
 
@@ -46,14 +56,28 @@ def _mock_message_response(text: str) -> Message:
 
 
 class TestAnthropicDescriberInit:
-    def test_creates_client_with_api_key(self) -> None:
+    def test_creates_client_with_api_key_and_max_retries(self) -> None:
         with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
             AnthropicDescriber(api_key="sk-test-123", model="claude-haiku-4-5-20251001")
-            mock_cls.assert_called_once_with(api_key="sk-test-123")
+            mock_cls.assert_called_once_with(api_key="sk-test-123", max_retries=DEFAULT_MAX_RETRIES)
+
+    def test_creates_client_with_custom_max_retries(self) -> None:
+        with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
+            AnthropicDescriber(api_key="sk-test-123", max_retries=5)
+            mock_cls.assert_called_once_with(api_key="sk-test-123", max_retries=5)
 
     def test_stores_model(self) -> None:
         describer, _ = _make_describer()
         assert describer._model == "test-model"
+
+    def test_stores_request_delay(self) -> None:
+        describer, _ = _make_describer(request_delay=2.5)
+        assert describer._request_delay == 2.5
+
+    def test_default_request_delay(self) -> None:
+        with patch("semantic_folder.description.describer.anthropic.Anthropic"):
+            describer = AnthropicDescriber(api_key="test-key")
+        assert describer._request_delay == DEFAULT_REQUEST_DELAY
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +196,24 @@ class TestSummarizeFileText:
         assert result == "Empty file."
         mock_client.messages.create.assert_called_once()
 
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.summarize_file("report.txt", b"content")
+
+        mock_sleep.assert_called_once_with(0.5)
+
+    def test_no_sleep_when_delay_is_zero(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.0)
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.summarize_file("report.txt", b"content")
+
+        mock_sleep.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # summarize_file tests — docx path
@@ -237,6 +279,21 @@ class TestSummarizeFileDocx:
 
         mock_extract.assert_called_once()
 
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        with (
+            patch("semantic_folder.description.describer.time.sleep") as mock_sleep,
+            patch(
+                "semantic_folder.description.describer._extract_docx_text",
+                return_value="Extracted text",
+            ),
+        ):
+            describer.summarize_file("doc.docx", b"\x50\x4b\x03\x04")
+
+        mock_sleep.assert_called_once_with(0.5)
+
 
 # ---------------------------------------------------------------------------
 # summarize_file tests — pdf path
@@ -298,6 +355,15 @@ class TestSummarizeFilePdf:
         content_blocks = call_kwargs["messages"][0]["content"]
         assert content_blocks[0]["type"] == "document"
 
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("PDF summary.")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.summarize_file("report.pdf", b"%PDF-1.4")
+
+        mock_sleep.assert_called_once_with(0.5)
+
 
 # ---------------------------------------------------------------------------
 # classify_folder tests
@@ -338,6 +404,15 @@ class TestClassifyFolder:
         assert result == "empty-folder"
         mock_client.messages.create.assert_called_once()
 
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("project-docs")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.classify_folder("/path", ["readme.md"])
+
+        mock_sleep.assert_called_once_with(0.5)
+
 
 # ---------------------------------------------------------------------------
 # anthropic_describer_from_config tests
@@ -350,10 +425,38 @@ class TestAnthropicDescriberFromConfig:
         config.anthropic_api_key = "sk-from-config"
         config.anthropic_model = "claude-haiku-4-5-20251001"
         config.max_file_content_bytes = 16384
+        config.anthropic_max_retries = 3
+        config.anthropic_request_delay = 1.0
 
         with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
             describer = anthropic_describer_from_config(config)
 
-        mock_cls.assert_called_once_with(api_key="sk-from-config")
+        mock_cls.assert_called_once_with(api_key="sk-from-config", max_retries=3)
         assert describer._model == "claude-haiku-4-5-20251001"
         assert describer._max_file_content_bytes == 16384
+
+    def test_passes_max_retries_from_config(self) -> None:
+        config = MagicMock()
+        config.anthropic_api_key = "sk-test"
+        config.anthropic_model = "test-model"
+        config.max_file_content_bytes = 8192
+        config.anthropic_max_retries = 5
+        config.anthropic_request_delay = 0.0
+
+        with patch("semantic_folder.description.describer.anthropic.Anthropic") as mock_cls:
+            anthropic_describer_from_config(config)
+
+        mock_cls.assert_called_once_with(api_key="sk-test", max_retries=5)
+
+    def test_passes_request_delay_from_config(self) -> None:
+        config = MagicMock()
+        config.anthropic_api_key = "sk-test"
+        config.anthropic_model = "test-model"
+        config.max_file_content_bytes = 8192
+        config.anthropic_max_retries = 3
+        config.anthropic_request_delay = 2.5
+
+        with patch("semantic_folder.description.describer.anthropic.Anthropic"):
+            describer = anthropic_describer_from_config(config)
+
+        assert describer._request_delay == 2.5

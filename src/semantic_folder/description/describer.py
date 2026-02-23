@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import anthropic
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Default content size limit per file
 DEFAULT_MAX_FILE_CONTENT_BYTES = 8192
+
+# Rate-limit defaults
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_REQUEST_DELAY = 1.0
 
 # File extensions that require special handling
 _DOCX_EXTENSIONS = frozenset({".docx"})
@@ -74,6 +79,8 @@ class AnthropicDescriber:
         api_key: str,
         model: str = "claude-haiku-4-5-20251001",
         max_file_content_bytes: int = DEFAULT_MAX_FILE_CONTENT_BYTES,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        request_delay: float = DEFAULT_REQUEST_DELAY,
     ) -> None:
         """Initialise the Anthropic client.
 
@@ -81,10 +88,13 @@ class AnthropicDescriber:
             api_key: Anthropic API key.
             model: Model identifier to use for generation.
             max_file_content_bytes: Max bytes to read per file for summarization.
+            max_retries: Max retry attempts for rate-limited requests (SDK built-in).
+            request_delay: Seconds to sleep before each API call to throttle throughput.
         """
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, max_retries=max_retries)
         self._model = model
         self._max_file_content_bytes = max_file_content_bytes
+        self._request_delay = request_delay
 
     def summarize_file(self, filename: str, content: bytes) -> str:
         """Generate a one-line summary of a file.
@@ -127,6 +137,8 @@ class AnthropicDescriber:
             filename,
             len(truncated),
         )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
         message = self._client.messages.create(
             model=self._model,
             max_tokens=150,
@@ -156,6 +168,8 @@ class AnthropicDescriber:
             filename,
             len(truncated),
         )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
         message = self._client.messages.create(
             model=self._model,
             max_tokens=150,
@@ -177,6 +191,8 @@ class AnthropicDescriber:
             filename,
             len(content),
         )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
         message = self._client.messages.create(
             model=self._model,
             max_tokens=150,
@@ -230,6 +246,8 @@ class AnthropicDescriber:
             folder_path,
             len(filenames),
         )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
         message = self._client.messages.create(
             model=self._model,
             max_tokens=50,
@@ -257,4 +275,6 @@ def anthropic_describer_from_config(config: AppConfig) -> AnthropicDescriber:
         api_key=config.anthropic_api_key,
         model=config.anthropic_model,
         max_file_content_bytes=config.max_file_content_bytes,
+        max_retries=config.anthropic_max_retries,
+        request_delay=config.anthropic_request_delay,
     )

@@ -41,7 +41,7 @@ graph/              → Infrastructure adapters (GraphClient, DeltaProcessor, mo
 - **graph/delta.py** — `DeltaProcessor` handles Delta API pagination, blob-stored delta tokens, loop prevention (filters out `folder_description.md`-only changes)
 - **graph/models.py** — `DriveItem`, `FolderListing` dataclasses with Graph API field constants
 - **description/cache.py** — `SummaryCache` backed by Azure Blob Storage; caches per-file summaries keyed by SHA-256 content hash to skip redundant LLM calls
-- **description/describer.py** — `AnthropicDescriber` wraps the Anthropic Messages API for file summarization and folder classification
+- **description/describer.py** — `AnthropicDescriber` wraps the Anthropic Messages API for file summarization and folder classification; includes rate-limit resilience via SDK retries (`max_retries`) and inter-request delay (`time.sleep`)
 - **description/generator.py** — `generate_description()` coordinates describer and cache to produce `FolderDescription` from `FolderListing`
 - **description/models.py** — `FileDescription`, `FolderDescription` dataclasses with Markdown serialization
 - **orchestration/processor.py** — `FolderProcessor` orchestrates the full pipeline; `process_delta()` is the main entry point
@@ -81,7 +81,7 @@ Each module provides a `*_from_config()` factory function for production wiring.
 ## Environment Variables
 
 Required: `SF_CLIENT_ID`, `SF_CLIENT_SECRET`, `SF_TENANT_ID`, `SF_DRIVE_USER`, `AzureWebJobsStorage`, `SF_ANTHROPIC_API_KEY`
-Optional (with defaults): `SF_DELTA_CONTAINER`, `SF_DELTA_BLOB`, `SF_FOLDER_DESCRIPTION_FILENAME`, `SF_ANTHROPIC_MODEL`, `SF_CACHE_CONTAINER`, `SF_CACHE_BLOB_PREFIX`
+Optional (with defaults): `SF_DELTA_CONTAINER`, `SF_DELTA_BLOB`, `SF_FOLDER_DESCRIPTION_FILENAME`, `SF_ANTHROPIC_MODEL`, `SF_CACHE_CONTAINER`, `SF_CACHE_BLOB_PREFIX`, `SF_ANTHROPIC_MAX_RETRIES`, `SF_ANTHROPIC_REQUEST_DELAY`
 
 See `.env.example` for the full template.
 
@@ -91,4 +91,4 @@ Terraform in `infra/` deploys to Azure (germanywestcentral): Resource Group, Sto
 
 ## Iteration Process
 
-Development follows numbered iterations in `iterations/`. Each has an input spec (`it-N.in.md`) and completion report (`it-N.out.md`). Currently at IT-6 complete. The system generates AI-powered folder descriptions using the Anthropic API and caches per-file summaries in Azure Blob Storage to skip redundant LLM calls.
+Run always the iteration agent for an iteration. If the agent is not running trigger it.

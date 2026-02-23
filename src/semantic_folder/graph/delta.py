@@ -75,7 +75,7 @@ class DeltaProcessor:
             data = blob_client.download_blob().readall()
             return data.decode("utf-8")
         except ResourceNotFoundError:
-            logger.debug("No delta token found in blob storage — first run")
+            logger.info("[get_delta_token] no delta token found in blob storage — first run")
             return None
 
     def save_delta_token(self, token: str) -> None:
@@ -87,14 +87,17 @@ class DeltaProcessor:
         container_client = self._blob_service.get_container_client(self._delta_container)
         try:
             container_client.create_container()
-            logger.debug("Created blob container '%s'", self._delta_container)
+            logger.info(
+                "[save_delta_token] created blob container; container:%s",
+                self._delta_container,
+            )
         except Exception:
             # Container already exists — this is the expected steady-state path.
             pass
 
         blob_client = container_client.get_blob_client(self._delta_blob)
         blob_client.upload_blob(token.encode("utf-8"), overwrite=True)
-        logger.debug("Saved delta token to blob storage")
+        logger.info("[save_delta_token] saved delta token to blob storage")
 
     def fetch_changes(self, token: str | None) -> tuple[list[DriveItem], str]:
         """Fetch changed drive items from the OneDrive delta API.
@@ -141,7 +144,9 @@ class DeltaProcessor:
                 next_path = self._relative_path(response[ODATA_NEXT_LINK])
             else:
                 # Malformed response — stop pagination to avoid infinite loop.
-                logger.warning("Delta response has neither nextLink nor deltaLink; stopping")
+                logger.warning(
+                    "[fetch_changes] delta response has neither nextLink nor deltaLink; stopping"
+                )
                 next_path = None
 
         if new_token is None:
@@ -212,8 +217,9 @@ class DeltaProcessor:
             names = {i.name for i in parent_items}
             if names == {self._folder_description_filename}:
                 excluded_parents.add(parent_id)
-                logger.debug(
-                    "Loop prevention: excluding parent_id=%s (only %s changed)",
+                logger.info(
+                    "[_apply_loop_prevention] excluding folder — only description file changed;"
+                    " parent_id:%s;filename:%s",
                     parent_id,
                     self._folder_description_filename,
                 )

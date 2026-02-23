@@ -64,7 +64,7 @@ class GraphClient:
         if "access_token" not in result:
             error = result.get("error", "unknown_error")
             description = result.get("error_description", "No description provided")
-            logger.error("MSAL token acquisition failed: %s", error)
+            logger.error("[_acquire_token] MSAL token acquisition failed; error:%s", error)
             raise GraphAuthError(f"Token acquisition failed: {error} — {description}")
         return str(result["access_token"])
 

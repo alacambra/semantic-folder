@@ -19,13 +19,13 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
     Returns service status and version. Will serve as the webhook
     endpoint for Graph notifications in a future iteration.
     """
-    logger.info("Health check requested")
+    logger.info("[health_check] health check requested")
 
     try:
         body = json.dumps({"status": "ok", "version": __version__})
         return func.HttpResponse(body, status_code=200, mimetype="application/json")
 
     except Exception:
-        logger.exception("Health check failed")
+        logger.error("[health_check] health check failed", exc_info=True)
         error_body = json.dumps({"status": "error", "message": "Internal server error"})
         return func.HttpResponse(error_body, status_code=500, mimetype="application/json")

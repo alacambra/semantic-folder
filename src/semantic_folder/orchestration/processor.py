@@ -109,11 +109,15 @@ class FolderProcessor:
         Returns:
             List of FolderListing objects for folders that need regeneration.
         """
+        logger.info("[process_delta] starting delta processing pipeline")
         token = self._delta.get_delta_token()
         items, new_token = self._delta.fetch_changes(token)
+        logger.info("[process_delta] fetched changes; item_count:%d", len(items))
         folder_ids = self.resolve_folders(items)
+        logger.info("[process_delta] resolved folders; folder_count:%d", len(folder_ids))
         listings = [self.list_folder(fid) for fid in folder_ids]
         self._delta.save_delta_token(new_token)
+        logger.info("[process_delta] pipeline complete; listing_count:%d", len(listings))
         return listings
 
 

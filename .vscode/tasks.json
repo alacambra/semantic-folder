@@ -20,6 +20,14 @@
       "problemMatcher": []
     },
     {
+      "label": "deploy",
+      "type": "shell",
+      "command": "make deploy FUNCTION_APP_NAME=func-semfolder-dev",
+      "detail": "Export requirements.txt and publish to Azure Functions",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
       "label": "transform-to-skill",
       "type": "shell",
       "command": "python3",

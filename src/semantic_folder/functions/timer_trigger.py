@@ -23,21 +23,23 @@ def timer_trigger(timer: func.TimerRequest) -> None:
     Runs every 5 minutes. Detects changed OneDrive folders via the delta API
     and logs which folders need description regeneration.
     """
-    logger.info("Timer trigger fired")
+    logger.info("[timer_trigger] timer trigger fired")
 
     try:
         if timer.past_due:
-            logger.warning("Timer trigger is past due")
+            logger.warning("[timer_trigger] timer trigger is past due")
 
         config = load_config()
         processor = folder_processor_from_config(config)
         listings = processor.process_delta()
         for listing in listings:
             logger.info(
-                "Folder to regenerate: %s (%d files)", listing.folder_path, len(listing.files)
+                "[timer_trigger] folder to regenerate; folder_path:%s;file_count:%d",
+                listing.folder_path,
+                len(listing.files),
             )
-        logger.info("Delta processing complete — %d folder(s) need regeneration", len(listings))
+        logger.info("[timer_trigger] delta processing complete; folder_count:%d", len(listings))
 
     except Exception:
-        logger.exception("Timer trigger failed")
+        logger.error("[timer_trigger] timer trigger failed", exc_info=True)
         raise

@@ -2,14 +2,14 @@
 document_id: GAP-5-TO-6
 version: 1.0.0
 last_updated: 2026-02-23
-purpose: Document staged (uncommitted) changes between IT-5 and IT-6 start
+purpose: Document changes between IT-5 and IT-6 start
 ---
 
 # Gap: IT-5 -> IT-6
 
-## Staged Changes (not yet committed)
+## Changes (commit `95a60c1`)
 
-The following files have staged modifications made after IT-5 (commit `f507dcf`) but before IT-6 scope definition. These changes enhance the Anthropic describer with file-type-specific handling and make the content size limit configurable.
+The following changes were made after IT-5 (commit `f507dcf`) but before IT-6 scope definition. These changes enhance the Anthropic describer with file-type-specific handling and make the content size limit configurable.
 
 ### Source Changes
 
@@ -40,13 +40,13 @@ The following files have staged modifications made after IT-5 (commit `f507dcf`)
 
 ### Dependency Changes
 
-**`pyproject.toml`** -- Added `python-docx>=1.1` dependency
+**`pyproject.toml`** -- Added `python-docx>=1.2.0,<2.0.0` dependency
 **`poetry.lock`** -- Updated with python-docx and transitive dependencies
 **`requirements.txt`** -- Regenerated
 
 ### Infrastructure Changes
 
-**`infra/function_app.tf`** -- Added `SF_ANTHROPIC_API_KEY` Key Vault reference
+**`infra/function_app.tf`** -- Added `SF_ANTHROPIC_API_KEY` Key Vault reference and `SF_MAX_FILE_CONTENT_BYTES = "5242880"` (5 MB)
 **`infra/keyvault.tf`** -- Added `anthropic-api-key` secret resource
 **`infra/variables.tf`** -- Added `anthropic_api_key` variable
 

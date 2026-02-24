@@ -9,7 +9,8 @@ import time
 from typing import TYPE_CHECKING
 
 import anthropic
-from anthropic.types import Message, TextBlock
+from anthropic.types import ImageBlockParam, Message, TextBlock, TextBlockParam
+from anthropic.types.base64_image_source_param import Base64ImageSourceParam
 
 if TYPE_CHECKING:
     from semantic_folder.config import AppConfig
@@ -26,6 +27,13 @@ DEFAULT_REQUEST_DELAY = 1.0
 # File extensions that require special handling
 _DOCX_EXTENSIONS = frozenset({".docx"})
 _PDF_EXTENSIONS = frozenset({".pdf"})
+_IMAGE_EXTENSIONS: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
 
 
 def _extract_text(message: Message) -> str:
@@ -102,6 +110,8 @@ class AnthropicDescriber:
         Dispatches to the appropriate strategy based on file extension:
         - ``.docx``: extracts plain text via python-docx, sends as text.
         - ``.pdf``: sends as a base64-encoded PDF document content block.
+        - Images (``.png``, ``.jpg``, ``.jpeg``, ``.gif``, ``.webp``): sends as
+          a base64-encoded image content block.
         - Everything else: decodes as UTF-8 text (with replacement).
 
         Args:
@@ -117,6 +127,8 @@ class AnthropicDescriber:
             return self._summarize_docx(filename, content)
         if ext in _PDF_EXTENSIONS:
             return self._summarize_pdf(filename, content)
+        if ext in _IMAGE_EXTENSIONS:
+            return self._summarize_image(filename, content, _IMAGE_EXTENSIONS[ext])
         return self._summarize_text(filename, content)
 
     def _summarize_text(self, filename: str, content: bytes) -> str:
@@ -215,6 +227,41 @@ class AnthropicDescriber:
                     ],
                 }
             ],
+        )
+        result = _extract_text(message)
+        logger.info(
+            "[summarize_file] received response; filename:%s;summary:%s",
+            filename,
+            result,
+        )
+        return result
+
+    def _summarize_image(self, filename: str, content: bytes, media_type: str) -> str:
+        """Summarize an image file using a base64-encoded image content block."""
+        encoded = base64.standard_b64encode(content).decode("ascii")
+        logger.info(
+            "[summarize_file] sending image block; filename:%s;raw_bytes:%d",
+            filename,
+            len(content),
+        )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
+        image_block = ImageBlockParam(
+            type="image",
+            source=Base64ImageSourceParam(
+                type="base64",
+                media_type=media_type,  # pyright: ignore[reportArgumentType]
+                data=encoded,
+            ),
+        )
+        text_block = TextBlockParam(
+            type="text",
+            text=f"Summarize this file in one sentence. File name: {filename}",
+        )
+        message = self._client.messages.create(
+            model=self._model,
+            max_tokens=150,
+            messages=[{"role": "user", "content": [image_block, text_block]}],
         )
         result = _extract_text(message)
         logger.info(

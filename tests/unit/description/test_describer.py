@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from anthropic.types import Message, TextBlock, Usage
 
 from semantic_folder.description.describer import (
+    _IMAGE_EXTENSIONS,
     DEFAULT_MAX_FILE_CONTENT_BYTES,
     DEFAULT_MAX_RETRIES,
     DEFAULT_REQUEST_DELAY,
@@ -363,6 +364,101 @@ class TestSummarizeFilePdf:
             describer.summarize_file("report.pdf", b"%PDF-1.4")
 
         mock_sleep.assert_called_once_with(0.5)
+
+
+# ---------------------------------------------------------------------------
+# summarize_file tests — image path
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeFileImage:
+    def test_sends_base64_image_block(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("A screenshot.")
+
+        img_bytes = b"\x89PNG\r\n\x1a\nfake"
+        result = describer.summarize_file("screenshot.png", img_bytes)
+
+        assert result == "A screenshot."
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["model"] == "test-model"
+        assert call_kwargs["max_tokens"] == 150
+        content_blocks = call_kwargs["messages"][0]["content"]
+        assert len(content_blocks) == 2
+
+        img_block = content_blocks[0]
+        assert img_block["type"] == "image"
+        assert img_block["source"]["type"] == "base64"
+        assert img_block["source"]["media_type"] == "image/png"
+        expected_b64 = base64.standard_b64encode(img_bytes).decode("ascii")
+        assert img_block["source"]["data"] == expected_b64
+
+        text_block = content_blocks[1]
+        assert text_block["type"] == "text"
+        assert "screenshot.png" in text_block["text"]
+
+    def test_jpg_uses_jpeg_media_type(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("A photo.")
+
+        describer.summarize_file("photo.jpg", b"\xff\xd8\xff")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        img_block = call_kwargs["messages"][0]["content"][0]
+        assert img_block["source"]["media_type"] == "image/jpeg"
+
+    def test_jpeg_uses_jpeg_media_type(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("A photo.")
+
+        describer.summarize_file("photo.jpeg", b"\xff\xd8\xff")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        img_block = call_kwargs["messages"][0]["content"][0]
+        assert img_block["source"]["media_type"] == "image/jpeg"
+
+    def test_case_insensitive_extension(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+        describer.summarize_file("DIAGRAM.PNG", b"\x89PNG")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        img_block = call_kwargs["messages"][0]["content"][0]
+        assert img_block["type"] == "image"
+
+    def test_does_not_truncate_image_content(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("Large image.")
+
+        large_img = b"\x89PNG" + b"\x00" * (DEFAULT_MAX_FILE_CONTENT_BYTES + 5000)
+        describer.summarize_file("large.png", large_img)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        img_block = call_kwargs["messages"][0]["content"][0]
+        expected_b64 = base64.standard_b64encode(large_img).decode("ascii")
+        assert img_block["source"]["data"] == expected_b64
+
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("Image summary.")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.summarize_file("photo.png", b"\x89PNG")
+
+        mock_sleep.assert_called_once_with(0.5)
+
+    def test_all_supported_extensions(self) -> None:
+        for ext, media_type in _IMAGE_EXTENSIONS.items():
+            describer, mock_client = _make_describer()
+            mock_client.messages.create.return_value = _mock_message_response("Summary.")
+
+            describer.summarize_file(f"file{ext}", b"\x00")
+
+            call_kwargs = mock_client.messages.create.call_args[1]
+            img_block = call_kwargs["messages"][0]["content"][0]
+            assert img_block["type"] == "image", f"Failed for {ext}"
+            assert img_block["source"]["media_type"] == media_type, f"Failed for {ext}"
 
 
 # ---------------------------------------------------------------------------

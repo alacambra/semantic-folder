@@ -121,15 +121,19 @@ class AnthropicDescriber:
         Returns:
             A brief summary string.
         """
-        ext = _file_extension(filename)
+        try:
+            ext = _file_extension(filename)
 
-        if ext in _DOCX_EXTENSIONS:
-            return self._summarize_docx(filename, content)
-        if ext in _PDF_EXTENSIONS:
-            return self._summarize_pdf(filename, content)
-        if ext in _IMAGE_EXTENSIONS:
-            return self._summarize_image(filename, content, _IMAGE_EXTENSIONS[ext])
-        return self._summarize_text(filename, content)
+            if ext in _DOCX_EXTENSIONS:
+                return self._summarize_docx(filename, content)
+            if ext in _PDF_EXTENSIONS:
+                return self._summarize_pdf(filename, content)
+            if ext in _IMAGE_EXTENSIONS:
+                return self._summarize_image(filename, content, _IMAGE_EXTENSIONS[ext])
+            return self._summarize_text(filename, content)
+        except Exception:
+            logger.exception("[summarize_file] failed; filename:%s", filename)
+            return f"[could not summarize: {filename}]"
 
     def _summarize_text(self, filename: str, content: bytes) -> str:
         """Summarize a text-decodable file."""
@@ -281,32 +285,36 @@ class AnthropicDescriber:
         Returns:
             A short folder type classification (e.g. "project-docs", "invoices").
         """
-        file_list = "\n".join(f"- {f}" for f in filenames)
-        prompt = (
-            f"Classify this folder into a short category label "
-            f"(1-2 words, lowercase, hyphenated). "
-            f"Folder path: {folder_path}\n"
-            f"Files:\n{file_list}"
-        )
-        logger.info(
-            "[classify_folder] sending prompt; folder:%s;file_count:%d",
-            folder_path,
-            len(filenames),
-        )
-        if self._request_delay > 0:
-            time.sleep(self._request_delay)
-        message = self._client.messages.create(
-            model=self._model,
-            max_tokens=50,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        result = _extract_text(message).strip()
-        logger.debug(
-            "[classify_folder] received response; folder:%s;classification:%s",
-            folder_path,
-            result,
-        )
-        return result
+        try:
+            file_list = "\n".join(f"- {f}" for f in filenames)
+            prompt = (
+                f"Classify this folder into a short category label "
+                f"(1-2 words, lowercase, hyphenated). "
+                f"Folder path: {folder_path}\n"
+                f"Files:\n{file_list}"
+            )
+            logger.info(
+                "[classify_folder] sending prompt; folder:%s;file_count:%d",
+                folder_path,
+                len(filenames),
+            )
+            if self._request_delay > 0:
+                time.sleep(self._request_delay)
+            message = self._client.messages.create(
+                model=self._model,
+                max_tokens=50,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            result = _extract_text(message).strip()
+            logger.debug(
+                "[classify_folder] received response; folder:%s;classification:%s",
+                folder_path,
+                result,
+            )
+            return result
+        except Exception:
+            logger.exception("[classify_folder] failed; folder:%s", folder_path)
+            return "uncategorized"
 
 
 def anthropic_describer_from_config(config: AppConfig) -> AnthropicDescriber:

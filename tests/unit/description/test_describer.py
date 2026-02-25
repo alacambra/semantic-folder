@@ -3,6 +3,7 @@
 import base64
 from unittest.mock import MagicMock, patch
 
+import anthropic
 from anthropic.types import Message, TextBlock, Usage
 
 from semantic_folder.description.describer import (
@@ -214,6 +215,26 @@ class TestSummarizeFileText:
             describer.summarize_file("report.txt", b"content")
 
         mock_sleep.assert_not_called()
+
+    def test_returns_fallback_on_api_error(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.side_effect = anthropic.BadRequestError(
+            message="Invalid request",
+            response=MagicMock(status_code=400, headers={}),
+            body=None,
+        )
+
+        result = describer.summarize_file("bad.txt", b"content")
+
+        assert result == "[could not summarize: bad.txt]"
+
+    def test_returns_fallback_on_generic_exception(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.side_effect = RuntimeError("unexpected")
+
+        result = describer.summarize_file("broken.pdf", b"%PDF")
+
+        assert result == "[could not summarize: broken.pdf]"
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +529,18 @@ class TestClassifyFolder:
             describer.classify_folder("/path", ["readme.md"])
 
         mock_sleep.assert_called_once_with(0.5)
+
+    def test_returns_fallback_on_api_error(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.side_effect = anthropic.BadRequestError(
+            message="Invalid request",
+            response=MagicMock(status_code=400, headers={}),
+            body=None,
+        )
+
+        result = describer.classify_folder("/path", ["file.txt"])
+
+        assert result == "uncategorized"
 
 
 # ---------------------------------------------------------------------------

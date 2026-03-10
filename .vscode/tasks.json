@@ -1,57 +1,42 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "transform-to-agent",
-      "type": "shell",
-      "command": "python3",
-      "args": [
-        "/Users/albert/git/ai-driven-software-development/agent-transformation-kit/transform_to_agent.py",
-        "/Users/albert/git/ai-driven-software-development/4-development-process/iteration-orchestration-process.md",
-        "--output-agents",
-        "/Users/albert/git/semantic-folder/.claude/agents",
-        "--output-skills",
-        "/Users/albert/git/semantic-folder/.claude/skills"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "deploy",
-      "type": "shell",
-      "command": "make deploy FUNCTION_APP_NAME=func-semfolder-dev",
-      "detail": "Export requirements.txt and publish to Azure Functions",
-      "group": "build",
-      "problemMatcher": []
-    },
-    {
-      "label": "trigger",
-      "type": "shell",
-      "command": "source .env.local && curl -X POST \"$SF_TRIGGER_URL\"",
-      "detail": "Trigger the HTTP endpoint for on-demand delta processing",
-      "problemMatcher": []
-    },
-    {
-      "label": "transform-to-skill",
-      "type": "shell",
-      "command": "python3",
-      "args": [
-        "/Users/albert/git/ai-driven-software-development/skill-transformation-kit/transform_to_skill.py",
-        "--all",
-        "--output",
-        "/Users/albert/git/semantic-folder/.claude/skills"
-      ],
-      "options": {
-        "cwd": "/Users/albert/git/ai-driven-software-development"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    }
-  ]
+ "version": "2.0.0",
+ "tasks": [
+  {
+   "label": "generate-skills",
+   "type": "shell",
+   "command": "python3",
+   "args": [
+    "link-map-toolkit/generate_skills.py",
+    "--bundle",
+    "projects/semantic-folder/bundle.json",
+    "--output",
+    "/Users/albert/git/semantic-folder/.claude/skills",
+    "--output-agents",
+    "/Users/albert/git/semantic-folder/.claude/agents"
+   ],
+   "options": {
+    "cwd": "/Users/albert/git/ai-driven-software-development"
+   },
+   "presentation": {
+    "reveal": "always",
+    "panel": "shared"
+   },
+   "problemMatcher": []
+  },
+  {
+   "label": "deploy",
+   "type": "shell",
+   "command": "make deploy FUNCTION_APP_NAME=func-semfolder-dev",
+   "detail": "Export requirements.txt and publish to Azure Functions",
+   "group": "build",
+   "problemMatcher": []
+  },
+  {
+   "label": "trigger",
+   "type": "shell",
+   "command": "source .env.local && curl -X POST \"$SF_TRIGGER_URL\"",
+   "detail": "Trigger the HTTP endpoint for on-demand delta processing",
+   "problemMatcher": []
+  }
+ ]
 }

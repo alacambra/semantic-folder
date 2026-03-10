@@ -4,9 +4,11 @@ import base64
 from unittest.mock import MagicMock, patch
 
 import anthropic
+import pytest
 from anthropic.types import Message, TextBlock, Usage
 
 from semantic_folder.description.describer import (
+    _EXTRACTION_MAX_TOKENS,
     _IMAGE_EXTENSIONS,
     DEFAULT_MAX_FILE_CONTENT_BYTES,
     DEFAULT_MAX_RETRIES,
@@ -589,3 +591,106 @@ class TestAnthropicDescriberFromConfig:
             describer = anthropic_describer_from_config(config)
 
         assert describer._request_delay == 2.5
+
+
+# ---------------------------------------------------------------------------
+# extract_metadata tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMetadata:
+    def test_text_file_sends_extraction_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("file: test.txt")
+
+        describer.extract_metadata("test.txt", b"some content")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == _EXTRACTION_MAX_TOKENS
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "document data extractor" in prompt
+        assert "Summarize this file in one sentence" not in prompt
+
+    def test_pdf_sends_document_block_with_extraction_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("file: doc.pdf")
+
+        pdf_bytes = b"%PDF-1.4 fake"
+        describer.extract_metadata("doc.pdf", pdf_bytes)
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == _EXTRACTION_MAX_TOKENS
+        content_blocks = call_kwargs["messages"][0]["content"]
+        assert content_blocks[0]["type"] == "document"
+        assert content_blocks[0]["source"]["media_type"] == "application/pdf"
+        assert "document data extractor" in content_blocks[1]["text"]
+
+    def test_image_sends_image_block_with_extraction_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("file: img.png")
+
+        describer.extract_metadata("img.png", b"\x89PNG\r\n\x1a\n")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == _EXTRACTION_MAX_TOKENS
+        content_blocks = call_kwargs["messages"][0]["content"]
+        assert content_blocks[0]["type"] == "image"
+        assert content_blocks[0]["source"]["media_type"] == "image/png"
+        assert "document data extractor" in content_blocks[1]["text"]
+
+    def test_docx_extracts_text_then_sends_extraction_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("file: doc.docx")
+
+        with patch(
+            "semantic_folder.description.describer._extract_docx_text",
+            return_value="Extracted docx text",
+        ):
+            describer.extract_metadata("doc.docx", b"\x50\x4b\x03\x04")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        assert call_kwargs["max_tokens"] == _EXTRACTION_MAX_TOKENS
+        prompt = call_kwargs["messages"][0]["content"]
+        assert "document data extractor" in prompt
+        assert "Extracted docx text" in prompt
+
+    def test_returns_raw_yaml_string(self) -> None:
+        describer, mock_client = _make_describer()
+        yaml_response = 'file: "test.txt"\ndoc_type: other\n'
+        mock_client.messages.create.return_value = _mock_message_response(yaml_response)
+
+        result = describer.extract_metadata("test.txt", b"content")
+
+        assert result == yaml_response
+
+    def test_filename_substituted_in_prompt(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.return_value = _mock_message_response("yaml")
+
+        describer.extract_metadata("my_invoice_2026.pdf", b"%PDF")
+
+        call_kwargs = mock_client.messages.create.call_args[1]
+        content_blocks = call_kwargs["messages"][0]["content"]
+        # PDF path uses content blocks
+        prompt_text = content_blocks[1]["text"]
+        assert "my_invoice_2026.pdf" in prompt_text
+
+    def test_sleeps_before_api_call(self) -> None:
+        describer, mock_client = _make_describer(request_delay=0.5)
+        mock_client.messages.create.return_value = _mock_message_response("yaml")
+
+        with patch("semantic_folder.description.describer.time.sleep") as mock_sleep:
+            describer.extract_metadata("test.txt", b"content")
+
+        mock_sleep.assert_called_once_with(0.5)
+
+    def test_propagates_api_errors(self) -> None:
+        describer, mock_client = _make_describer()
+        mock_client.messages.create.side_effect = anthropic.BadRequestError(
+            message="Invalid request",
+            response=MagicMock(status_code=400, headers={}),
+            body=None,
+        )
+
+        with pytest.raises(anthropic.BadRequestError):
+            describer.extract_metadata("test.txt", b"content")

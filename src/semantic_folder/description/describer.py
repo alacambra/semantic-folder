@@ -12,6 +12,8 @@ import anthropic
 from anthropic.types import ImageBlockParam, Message, TextBlock, TextBlockParam
 from anthropic.types.base64_image_source_param import Base64ImageSourceParam
 
+from semantic_folder.description.models import DOC_TYPES
+
 if TYPE_CHECKING:
     from semantic_folder.config import AppConfig
 
@@ -34,6 +36,57 @@ _IMAGE_EXTENSIONS: dict[str, str] = {
     ".gif": "image/gif",
     ".webp": "image/webp",
 }
+
+_EXTRACTION_PROMPT_TEMPLATE = """\
+You are a document data extractor for a German IT consultancy (Datamantics UG, \
+operated by Albert Lacambra Basil). Extract structured metadata from the \
+provided document.
+
+Return ONLY valid YAML (no markdown fences, no commentary). Follow this \
+exact structure:
+
+file: "{filename}"
+doc_type: <see list below>
+doc_lang: <2-letter ISO code of the document's language>
+date: "YYYY-MM-DD"
+parties:
+  from: <who sent/issued this>
+  to: <who received this, or null>
+summary: >
+  2-3 sentences. State what the document IS, its key content,
+  and any critical dates or amounts. Be factual, no filler.
+tags: [<lowercase keywords for search -- include: topic, vendor/entity, \
+document purpose, relevant domain>]
+facts:
+  <key>: <value>
+  # Extract ALL notable structured data points from the document.
+  # Use clear, consistent key names in snake_case.
+  # Common keys (use when applicable):
+  #   amount, currency, vat_amount, vat_rate -- for anything with money
+  #   deadline, due_date, valid_until -- for time-sensitive items
+  #   reference_number, policy_number, invoice_number -- for identifiers
+  #   client, project, phase -- for project-related docs
+  #   contract_start, contract_end, notice_period -- for contracts
+  #   country -- 2-letter ISO code where transaction/entity is located
+  #   expense_category -- one of: travel, software, telecom, hosting, \
+office, professional, insurance, fees, meals
+  # Add any other keys that capture important document-specific data.
+  # Do NOT include keys with null values -- omit them entirely.
+
+Allowed doc_type values:
+{allowed_doc_types}
+
+Rules:
+- Extract facts from the ACTUAL document content, never invent data
+- For amounts: use decimal numbers (45.51 not "45,51 EUR")
+- For dates: always YYYY-MM-DD format
+- For German documents: keep vendor/entity names as-is but translate \
+the summary and tags to English for consistent search
+- If the document is a scan/image and partially illegible, note this \
+in the summary
+- tags should be 4-8 lowercase terms useful for keyword search"""
+
+_EXTRACTION_MAX_TOKENS = 1024
 
 
 def _extract_text(message: Message) -> str:
@@ -134,6 +187,148 @@ class AnthropicDescriber:
         except Exception:
             logger.exception("[summarize_file] failed; filename:%s", filename)
             return f"[could not summarize: {filename}]"
+
+    def extract_metadata(self, filename: str, content: bytes) -> str:
+        """Extract structured YAML metadata from a file.
+
+        Dispatches to the appropriate content strategy based on file extension
+        (text, docx, pdf, image) and sends the extraction prompt instead of
+        the one-sentence summary prompt. Returns the raw YAML string from the
+        LLM response.
+
+        Args:
+            filename: Name of the file.
+            content: Raw file content.
+
+        Returns:
+            Raw YAML string from the LLM extraction response.
+
+        Raises:
+            Exception: Propagates API errors to the caller for handling.
+        """
+        ext = _file_extension(filename)
+        allowed_doc_types = ", ".join(sorted(DOC_TYPES))
+        prompt = _EXTRACTION_PROMPT_TEMPLATE.format(
+            filename=filename, allowed_doc_types=allowed_doc_types
+        )
+
+        if ext in _DOCX_EXTENSIONS:
+            return self._extract_docx(filename, content, prompt)
+        if ext in _PDF_EXTENSIONS:
+            return self._extract_pdf(filename, content, prompt)
+        if ext in _IMAGE_EXTENSIONS:
+            return self._extract_image(filename, content, prompt, _IMAGE_EXTENSIONS[ext])
+        return self._extract_text_file(filename, content, prompt)
+
+    def _extract_text_file(self, filename: str, content: bytes, prompt: str) -> str:
+        """Extract metadata from a text-decodable file."""
+        truncated = content[: self._max_file_content_bytes]
+        try:
+            text_content = truncated.decode("utf-8", errors="replace")
+        except Exception:
+            text_content = f"[binary file: {filename}]"
+
+        full_prompt = f"{prompt}\n\nFile name: {filename}\n\nContent:\n{text_content}"
+        logger.info(
+            "[extract_metadata] sending text prompt; filename:%s;content_bytes:%d",
+            filename,
+            len(truncated),
+        )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
+        message = self._client.messages.create(
+            model=self._model,
+            max_tokens=_EXTRACTION_MAX_TOKENS,
+            messages=[{"role": "user", "content": full_prompt}],
+        )
+        return _extract_text(message)
+
+    def _extract_docx(self, filename: str, content: bytes, prompt: str) -> str:
+        """Extract metadata from a .docx file."""
+        extracted = _extract_docx_text(content)
+        if not extracted:
+            logger.warning("[extract_metadata] docx text extraction empty; filename:%s", filename)
+            extracted = f"[could not extract text from {filename}]"
+
+        truncated = extracted[: self._max_file_content_bytes]
+        full_prompt = f"{prompt}\n\nFile name: {filename}\n\nContent:\n{truncated}"
+        logger.info(
+            "[extract_metadata] sending docx prompt; filename:%s;chars:%d",
+            filename,
+            len(truncated),
+        )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
+        message = self._client.messages.create(
+            model=self._model,
+            max_tokens=_EXTRACTION_MAX_TOKENS,
+            messages=[{"role": "user", "content": full_prompt}],
+        )
+        return _extract_text(message)
+
+    def _extract_pdf(self, filename: str, content: bytes, prompt: str) -> str:
+        """Extract metadata from a PDF file using a document content block."""
+        encoded = base64.standard_b64encode(content).decode("ascii")
+        logger.info(
+            "[extract_metadata] sending pdf document block; filename:%s;raw_bytes:%d",
+            filename,
+            len(content),
+        )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
+        message = self._client.messages.create(
+            model=self._model,
+            max_tokens=_EXTRACTION_MAX_TOKENS,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": encoded,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt,
+                        },
+                    ],
+                }
+            ],
+        )
+        return _extract_text(message)
+
+    def _extract_image(self, filename: str, content: bytes, prompt: str, media_type: str) -> str:
+        """Extract metadata from an image file using a base64 image content block."""
+        encoded = base64.standard_b64encode(content).decode("ascii")
+        logger.info(
+            "[extract_metadata] sending image block; filename:%s;raw_bytes:%d",
+            filename,
+            len(content),
+        )
+        if self._request_delay > 0:
+            time.sleep(self._request_delay)
+        image_block = ImageBlockParam(
+            type="image",
+            source=Base64ImageSourceParam(
+                type="base64",
+                media_type=media_type,  # pyright: ignore[reportArgumentType]
+                data=encoded,
+            ),
+        )
+        text_block = TextBlockParam(
+            type="text",
+            text=prompt,
+        )
+        message = self._client.messages.create(
+            model=self._model,
+            max_tokens=_EXTRACTION_MAX_TOKENS,
+            messages=[{"role": "user", "content": [image_block, text_block]}],
+        )
+        return _extract_text(message)
 
     def _summarize_text(self, filename: str, content: bytes) -> str:
         """Summarize a text-decodable file."""

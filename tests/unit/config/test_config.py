@@ -178,3 +178,19 @@ class TestLoadConfig:
         with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
             config = load_config()
         assert config.anthropic_request_delay == 1.0
+
+    def test_folder_description_filename_defaults_to_yaml(self) -> None:
+        with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
+            config = load_config()
+        assert config.folder_description_filename == "folder_description.yaml"
+
+    def test_load_config_folder_description_filename_defaults_to_yaml(self) -> None:
+        config = AppConfig(
+            client_id="cid",
+            client_secret="cs",
+            tenant_id="tid",
+            drive_user="u",
+            storage_connection_string="conn",
+            anthropic_api_key="sk-test",
+        )
+        assert config.folder_description_filename == "folder_description.yaml"

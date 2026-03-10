@@ -20,7 +20,17 @@ def _make_processor() -> tuple[FolderProcessor, MagicMock, MagicMock, MagicMock]
     mock_graph = MagicMock()
     mock_describer = MagicMock()
     mock_describer.classify_folder.return_value = "project-docs"
-    mock_describer.summarize_file.side_effect = lambda name, content: f"Summary of {name}"
+    mock_describer.extract_metadata.side_effect = lambda name, content: (
+        f'file: "{name}"\n'
+        f"doc_type: other\n"
+        f"doc_lang: en\n"
+        f'date: "2026-01-01"\n'
+        f"parties:\n"
+        f"  from: unknown\n"
+        f"  to: null\n"
+        f"summary: Mock extraction of {name}\n"
+        f"tags: [test]\n"
+    )
     processor = FolderProcessor(
         delta_processor=mock_delta,
         graph_client=mock_graph,
@@ -532,7 +542,7 @@ class TestUploadDescription:
         path = call_args[0][0]
         assert path == (
             "/users/testuser@contoso.onmicrosoft.com/drive/items/folder-abc"
-            ":/folder_description.md:/content"
+            ":/folder_description.yaml:/content"
         )
 
     def test_reads_file_contents_then_generates_description(self) -> None:
@@ -553,7 +563,7 @@ class TestUploadDescription:
             "/users/testuser@contoso.onmicrosoft.com/drive/items/id-report/content"
         )
         # Verify describer was called with the content
-        mock_describer.summarize_file.assert_called_once_with("report.pdf", b"report data")
+        mock_describer.extract_metadata.assert_called_once_with("report.pdf", b"report data")
         mock_describer.classify_folder.assert_called_once()
 
     def test_uses_configured_filename(self) -> None:
@@ -561,7 +571,7 @@ class TestUploadDescription:
         mock_graph = MagicMock()
         mock_describer = MagicMock()
         mock_describer.classify_folder.return_value = "docs"
-        mock_describer.summarize_file.return_value = "summary"
+        mock_describer.extract_metadata.return_value = "doc_type: other\n"
         processor = FolderProcessor(
             delta_processor=mock_delta,
             graph_client=mock_graph,
@@ -577,7 +587,7 @@ class TestUploadDescription:
         path = mock_graph.put_content.call_args[0][0]
         assert ":/custom_desc.md:/content" in path
 
-    def test_content_is_utf8_encoded_markdown(self) -> None:
+    def test_content_is_utf8_encoded_yaml(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
         mock_graph.get_content.return_value = b"data"
 
@@ -593,8 +603,8 @@ class TestUploadDescription:
         content = mock_graph.put_content.call_args[0][1]
         assert isinstance(content, bytes)
         text = content.decode("utf-8")
-        assert "---" in text
-        assert "## a.txt" in text
+        assert "folder:" in text
+        assert "documents:" in text
 
 
 # ---------------------------------------------------------------------------
@@ -632,12 +642,12 @@ class TestUploadDescriptionWithCache:
         mock_graph.get_content.return_value = b"data"
         mock_describer = MagicMock()
         mock_describer.classify_folder.return_value = "docs"
-        mock_describer.summarize_file.return_value = "summary"
+        mock_describer.extract_metadata.return_value = "doc_type: other\n"
 
         # Set up generate_description mock return
         mock_desc = MagicMock()
-        mock_desc.to_markdown.return_value = "# markdown"
-        mock_desc.files = []
+        mock_desc.to_yaml.return_value = "folder:\n  path: /p\n"
+        mock_desc.documents = []
         mock_gen_desc.return_value = mock_desc
 
         processor = FolderProcessor(
@@ -664,8 +674,8 @@ class TestUploadDescriptionWithCache:
         mock_graph.get_content.return_value = b"data"
 
         mock_desc = MagicMock()
-        mock_desc.to_markdown.return_value = "# markdown"
-        mock_desc.files = []
+        mock_desc.to_yaml.return_value = "folder:\n  path: /p\n"
+        mock_desc.documents = []
         mock_gen_desc.return_value = mock_desc
 
         processor = FolderProcessor(

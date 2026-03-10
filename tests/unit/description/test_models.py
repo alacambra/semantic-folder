@@ -1,17 +1,67 @@
-"""Unit tests for description/models.py — FileDescription and FolderDescription."""
+"""Unit tests for description/models.py -- DocumentRecord, Parties, FolderDescription, DOC_TYPES."""
 
-from semantic_folder.description.models import FileDescription, FolderDescription
+import yaml
+
+from semantic_folder.description.models import (
+    DOC_TYPES,
+    DocumentRecord,
+    FolderDescription,
+    Parties,
+)
 
 # ---------------------------------------------------------------------------
-# FileDescription tests
+# DocumentRecord tests
 # ---------------------------------------------------------------------------
 
 
-class TestFileDescription:
-    def test_stores_filename_and_summary(self) -> None:
-        fd = FileDescription(filename="report.pdf", summary="A quarterly report")
-        assert fd.filename == "report.pdf"
-        assert fd.summary == "A quarterly report"
+class TestDocumentRecord:
+    def test_stores_all_envelope_fields(self) -> None:
+        parties = Parties(from_="Acme Corp", to="Datamantics UG")
+        record = DocumentRecord(
+            file="invoice.pdf",
+            doc_type="invoice-incoming",
+            doc_lang="de",
+            date="2026-01-15",
+            parties=parties,
+            summary="An invoice for consulting services.",
+            tags=["invoice", "consulting"],
+            facts={"amount": 1500.0, "currency": "EUR"},
+        )
+        assert record.file == "invoice.pdf"
+        assert record.doc_type == "invoice-incoming"
+        assert record.doc_lang == "de"
+        assert record.date == "2026-01-15"
+        assert record.parties.from_ == "Acme Corp"
+        assert record.parties.to == "Datamantics UG"
+        assert record.summary == "An invoice for consulting services."
+        assert record.tags == ["invoice", "consulting"]
+        assert record.facts == {"amount": 1500.0, "currency": "EUR"}
+
+    def test_tags_defaults_to_empty_list(self) -> None:
+        record = DocumentRecord(
+            file="f.txt",
+            doc_type="other",
+            doc_lang="en",
+            date="",
+            parties=Parties(from_="unknown"),
+            summary="",
+        )
+        assert record.tags == []
+
+    def test_facts_defaults_to_empty_dict(self) -> None:
+        record = DocumentRecord(
+            file="f.txt",
+            doc_type="other",
+            doc_lang="en",
+            date="",
+            parties=Parties(from_="unknown"),
+            summary="",
+        )
+        assert record.facts == {}
+
+    def test_parties_to_defaults_to_none(self) -> None:
+        parties = Parties(from_="Sender")
+        assert parties.to is None
 
 
 # ---------------------------------------------------------------------------
@@ -21,20 +71,28 @@ class TestFileDescription:
 
 class TestFolderDescription:
     def test_stores_all_fields(self) -> None:
+        record = DocumentRecord(
+            file="a.pdf",
+            doc_type="other",
+            doc_lang="en",
+            date="2026-01-01",
+            parties=Parties(from_="X"),
+            summary="A document.",
+        )
         desc = FolderDescription(
             folder_path="/drive/root:/Docs",
-            folder_type="customer",
-            files=[FileDescription(filename="a.pdf", summary="summary-a")],
-            updated_at="2026-02-23",
+            folder_type="project-docs",
+            documents=[record],
+            updated_at="2026-03-10",
         )
         assert desc.folder_path == "/drive/root:/Docs"
-        assert desc.folder_type == "customer"
-        assert len(desc.files) == 1
-        assert desc.updated_at == "2026-02-23"
+        assert desc.folder_type == "project-docs"
+        assert len(desc.documents) == 1
+        assert desc.updated_at == "2026-03-10"
 
-    def test_files_defaults_to_empty_list(self) -> None:
+    def test_documents_defaults_to_empty_list(self) -> None:
         desc = FolderDescription(folder_path="/p", folder_type="t")
-        assert desc.files == []
+        assert desc.documents == []
 
     def test_updated_at_defaults_to_empty_string(self) -> None:
         desc = FolderDescription(folder_path="/p", folder_type="t")
@@ -42,66 +100,188 @@ class TestFolderDescription:
 
 
 # ---------------------------------------------------------------------------
-# to_markdown() tests
+# to_yaml() tests
 # ---------------------------------------------------------------------------
 
 
-class TestToMarkdown:
-    def test_produces_yaml_frontmatter_and_file_sections(self) -> None:
+def _make_record(
+    file: str = "test.pdf",
+    doc_type: str = "invoice-incoming",
+    doc_lang: str = "en",
+    date: str = "2026-01-15",
+    from_: str = "Acme Corp",
+    to: str | None = "Datamantics UG",
+    summary: str = "A test document.",
+    tags: list[str] | None = None,
+    facts: dict[str, object] | None = None,
+) -> DocumentRecord:
+    return DocumentRecord(
+        file=file,
+        doc_type=doc_type,
+        doc_lang=doc_lang,
+        date=date,
+        parties=Parties(from_=from_, to=to),
+        summary=summary,
+        tags=tags if tags is not None else ["test", "invoice"],
+        facts=facts if facts is not None else {},
+    )
+
+
+class TestToYaml:
+    def test_produces_folder_block_with_path_type_updated_at(self) -> None:
         desc = FolderDescription(
-            folder_path="/drive/root:/Customers/Nexplore",
-            folder_type="[folder-type]",
-            files=[
-                FileDescription(filename="SOW.pdf", summary="[SOW.pdf-description]"),
-                FileDescription(filename="invoice.pdf", summary="[invoice.pdf-description]"),
+            folder_path="/drive/root:/Docs",
+            folder_type="invoices",
+            updated_at="2026-03-10",
+        )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        assert parsed["folder"]["path"] == "/drive/root:/Docs"
+        assert parsed["folder"]["type"] == "invoices"
+        assert parsed["folder"]["updated_at"] == "2026-03-10"
+
+    def test_produces_documents_list(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[_make_record(file="a.pdf"), _make_record(file="b.pdf")],
+            updated_at="2026-01-01",
+        )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        assert len(parsed["documents"]) == 2
+        assert parsed["documents"][0]["file"] == "a.pdf"
+        assert parsed["documents"][1]["file"] == "b.pdf"
+
+    def test_document_record_has_all_envelope_fields(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(
+                    file="invoice.pdf",
+                    doc_type="invoice-incoming",
+                    doc_lang="de",
+                    date="2026-01-15",
+                    from_="Sender Inc",
+                    to="Receiver Ltd",
+                    summary="An important invoice.",
+                    tags=["invoice", "payment"],
+                    facts={"amount": 100.0},
+                )
             ],
-            updated_at="2026-02-23",
         )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        doc = parsed["documents"][0]
+        assert doc["file"] == "invoice.pdf"
+        assert doc["doc_type"] == "invoice-incoming"
+        assert doc["doc_lang"] == "de"
+        assert doc["date"] == "2026-01-15"
+        assert doc["parties"]["from"] == "Sender Inc"
+        assert doc["parties"]["to"] == "Receiver Ltd"
+        assert doc["summary"] == "An important invoice."
+        assert doc["tags"] == ["invoice", "payment"]
+        assert doc["facts"]["amount"] == 100.0
 
-        md = desc.to_markdown()
-
-        assert md.startswith("---\n")
-        assert "folder_path: /drive/root:/Customers/Nexplore\n" in md
-        assert 'folder_type: "[folder-type]"\n' in md
-        assert "updated_at: 2026-02-23\n" in md
-        assert "\n## SOW.pdf\n" in md
-        assert "\n[SOW.pdf-description]\n" in md
-        assert "\n## invoice.pdf\n" in md
-        assert "\n[invoice.pdf-description]\n" in md
-
-    def test_folder_type_is_quoted_in_yaml(self) -> None:
+    def test_facts_block_present_when_non_empty(self) -> None:
         desc = FolderDescription(
-            folder_path="/p", folder_type="[folder-type]", updated_at="2026-01-01"
+            folder_path="/p",
+            folder_type="t",
+            documents=[_make_record(facts={"amount": 50.0, "currency": "EUR"})],
         )
-        md = desc.to_markdown()
-        assert 'folder_type: "[folder-type]"' in md
+        output = desc.to_yaml()
+        assert "facts:" in output
+        parsed = yaml.safe_load(output)
+        assert parsed["documents"][0]["facts"]["amount"] == 50.0
+        assert parsed["documents"][0]["facts"]["currency"] == "EUR"
 
-    def test_empty_files_produces_frontmatter_only(self) -> None:
+    def test_facts_block_absent_when_empty(self) -> None:
         desc = FolderDescription(
-            folder_path="/drive/root:/Empty",
-            folder_type="unknown",
-            files=[],
-            updated_at="2026-02-23",
+            folder_path="/p",
+            folder_type="t",
+            documents=[_make_record(facts={})],
         )
+        output = desc.to_yaml()
+        assert "facts:" not in output
 
-        md = desc.to_markdown()
+    def test_tags_rendered_as_flow_sequence(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[_make_record(tags=["alpha", "beta", "gamma"])],
+        )
+        output = desc.to_yaml()
+        assert "[alpha, beta, gamma]" in output
 
-        assert "---\n" in md
-        assert "## " not in md
+    def test_parties_null_to_rendered_correctly(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[_make_record(to=None)],
+        )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        assert parsed["documents"][0]["parties"]["to"] is None
+
+    def test_empty_documents_produces_empty_list(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[],
+        )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        assert parsed["documents"] == []
 
     def test_output_ends_with_trailing_newline(self) -> None:
         desc = FolderDescription(
             folder_path="/p",
             folder_type="t",
-            files=[FileDescription(filename="f.txt", summary="s")],
+            documents=[_make_record()],
             updated_at="2026-01-01",
         )
-        md = desc.to_markdown()
-        assert md.endswith("\n")
+        output = desc.to_yaml()
+        assert output.endswith("\n")
 
-    def test_frontmatter_delimiters_present(self) -> None:
-        desc = FolderDescription(folder_path="/p", folder_type="t", updated_at="2026-01-01")
-        md = desc.to_markdown()
-        lines = md.split("\n")
-        assert lines[0] == "---"
-        assert "---" in lines[4]  # closing delimiter
+    def test_output_is_valid_yaml(self) -> None:
+        desc = FolderDescription(
+            folder_path="/drive/root:/Test",
+            folder_type="invoices",
+            documents=[
+                _make_record(
+                    facts={"amount": 100.0, "currency": "EUR"},
+                    tags=["invoice", "test"],
+                )
+            ],
+            updated_at="2026-03-10",
+        )
+        output = desc.to_yaml()
+        parsed = yaml.safe_load(output)
+        assert isinstance(parsed, dict)
+        assert "folder" in parsed
+        assert "documents" in parsed
+
+
+# ---------------------------------------------------------------------------
+# DOC_TYPES tests
+# ---------------------------------------------------------------------------
+
+
+class TestDocTypes:
+    def test_doc_types_contains_expected_values(self) -> None:
+        expected = {
+            "invoice-incoming",
+            "invoice-outgoing",
+            "receipt",
+            "contract",
+            "other",
+            "tax-notice",
+            "insurance-policy",
+            "correspondence",
+        }
+        for value in expected:
+            assert value in DOC_TYPES
+
+    def test_doc_types_is_frozenset(self) -> None:
+        assert isinstance(DOC_TYPES, frozenset)

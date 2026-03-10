@@ -1,0 +1,3 @@
+curl 'https://ceo.oepm.es/apiceo/wsDetalleExpedienteOEPM/detalleExpedienteOEPM' \
+  -H 'content-type: application/json' \
+  --data-raw '{"numExpediente":"M0002712B2"}'

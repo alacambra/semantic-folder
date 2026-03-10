@@ -24,7 +24,7 @@ class AppConfig:
     # Domain constants — defaults provided, overridable via env
     delta_container: str = "semantic-folder-state"
     delta_blob: str = "delta-token/current.txt"
-    folder_description_filename: str = "folder_description.md"
+    folder_description_filename: str = "folder_description.yaml"
     anthropic_model: str = "claude-haiku-4-5-20251001"
     max_file_content_bytes: int = 8192
     cache_container: str = "semantic-folder-state"
@@ -68,7 +68,7 @@ def load_config() -> AppConfig:
         delta_container=os.environ.get("SF_DELTA_CONTAINER", "semantic-folder-state"),
         delta_blob=os.environ.get("SF_DELTA_BLOB", "delta-token/current.txt"),
         folder_description_filename=os.environ.get(
-            "SF_FOLDER_DESCRIPTION_FILENAME", "folder_description.md"
+            "SF_FOLDER_DESCRIPTION_FILENAME", "folder_description.yaml"
         ),
         anthropic_model=os.environ.get("SF_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         max_file_content_bytes=int(os.environ.get("SF_MAX_FILE_CONTENT_BYTES", "8192")),

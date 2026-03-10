@@ -39,7 +39,7 @@ class FolderProcessor:
         graph_client: GraphClient,
         drive_user: str,
         describer: AnthropicDescriber,
-        folder_description_filename: str = "folder_description.md",
+        folder_description_filename: str = "folder_description.yaml",
         cache: SummaryCache | None = None,
     ) -> None:
         """Initialise the folder processor.
@@ -145,7 +145,7 @@ class FolderProcessor:
 
         Reads file content for each file in the listing, generates an
         AI description using the Anthropic describer, serializes the
-        result to Markdown, and uploads it as ``folder_description.md``
+        result to YAML, and uploads it as ``folder_description.yaml``
         (or the configured filename) to the folder in OneDrive.
 
         Args:
@@ -153,16 +153,16 @@ class FolderProcessor:
         """
         file_contents = self.read_file_contents(listing)
         description = generate_description(listing, self._describer, file_contents, self._cache)
-        content = description.to_markdown().encode("utf-8")
+        content = description.to_yaml().encode("utf-8")
         path = (
             f"/users/{self._drive_user}/drive/items/{listing.folder_id}"
             f":/{self._folder_description_filename}:/content"
         )
         self._graph.put_content(path, content)
         logger.info(
-            "[upload_description] uploaded description; folder_path:%s;file_count:%d",
+            "[upload_description] uploaded description; folder_path:%s;document_count:%d",
             listing.folder_path,
-            len(description.files),
+            len(description.documents),
         )
 
     def process_delta(self) -> list[FolderListing]:

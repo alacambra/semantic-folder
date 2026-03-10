@@ -268,6 +268,34 @@ class TestListFolder:
         assert result.file_ids == []
         assert result.folder_path == ""
 
+    def test_excludes_description_files_from_listing(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+
+        mock_graph.get.return_value = {
+            "value": [
+                {
+                    "id": "f1",
+                    "name": "invoice.pdf",
+                    "parentReference": {"id": "p1", "path": "/drive/root:/Docs"},
+                },
+                {
+                    "id": "f2",
+                    "name": "folder_description.yaml",
+                    "parentReference": {"id": "p1", "path": "/drive/root:/Docs"},
+                },
+                {
+                    "id": "f3",
+                    "name": "folder_description.md",
+                    "parentReference": {"id": "p1", "path": "/drive/root:/Docs"},
+                },
+            ]
+        }
+
+        result = processor.list_folder("p1")
+
+        assert result.files == ["invoice.pdf"]
+        assert result.file_ids == ["f1"]
+
     def test_folder_path_from_first_child_parent_reference(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
 

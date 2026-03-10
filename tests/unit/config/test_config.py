@@ -83,7 +83,7 @@ class TestAppConfig:
             storage_connection_string="conn",
             anthropic_api_key="sk-test",
         )
-        assert config.cache_blob_prefix == "summary-cache/"
+        assert config.cache_blob_prefix == "metadata-cache/"
 
     def test_anthropic_max_retries_has_default(self) -> None:
         config = AppConfig(
@@ -155,7 +155,7 @@ class TestLoadConfig:
     def test_cache_blob_prefix_defaults_when_env_not_set(self) -> None:
         with patch.dict(os.environ, _REQUIRED_ENV, clear=False):
             config = load_config()
-        assert config.cache_blob_prefix == "summary-cache/"
+        assert config.cache_blob_prefix == "metadata-cache/"
 
     def test_reads_anthropic_max_retries_from_env(self) -> None:
         env = {**_REQUIRED_ENV, "SF_ANTHROPIC_MAX_RETRIES": "5"}

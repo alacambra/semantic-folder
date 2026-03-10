@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Named constants for cache configuration defaults
 DEFAULT_CACHE_CONTAINER = "semantic-folder-state"
-DEFAULT_CACHE_BLOB_PREFIX = "summary-cache/"
+DEFAULT_CACHE_BLOB_PREFIX = "metadata-cache/"
 
 
 class SummaryCache:

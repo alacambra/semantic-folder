@@ -103,14 +103,21 @@ class FolderProcessor:
             parent_ref = children[0].get(FIELD_PARENT_REFERENCE, {})
             folder_path = parent_ref.get(FIELD_PATH, "")
 
+        excluded = {self._folder_description_filename, "folder_description.md"}
         files = [
             child[FIELD_NAME]
             for child in children
-            if FIELD_FOLDER not in child and FIELD_NAME in child
+            if FIELD_FOLDER not in child
+            and FIELD_NAME in child
+            and child[FIELD_NAME] not in excluded
         ]
 
         file_ids = [
-            child[FIELD_ID] for child in children if FIELD_FOLDER not in child and FIELD_ID in child
+            child[FIELD_ID]
+            for child in children
+            if FIELD_FOLDER not in child
+            and FIELD_ID in child
+            and child.get(FIELD_NAME) not in excluded
         ]
 
         return FolderListing(

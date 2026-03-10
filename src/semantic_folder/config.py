@@ -28,7 +28,7 @@ class AppConfig:
     anthropic_model: str = "claude-haiku-4-5-20251001"
     max_file_content_bytes: int = 8192
     cache_container: str = "semantic-folder-state"
-    cache_blob_prefix: str = "summary-cache/"
+    cache_blob_prefix: str = "metadata-cache/"
     anthropic_max_retries: int = 3
     anthropic_request_delay: float = 1.0
 
@@ -73,7 +73,7 @@ def load_config() -> AppConfig:
         anthropic_model=os.environ.get("SF_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         max_file_content_bytes=int(os.environ.get("SF_MAX_FILE_CONTENT_BYTES", "8192")),
         cache_container=os.environ.get("SF_CACHE_CONTAINER", "semantic-folder-state"),
-        cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "summary-cache/"),
+        cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "metadata-cache/"),
         anthropic_max_retries=int(os.environ.get("SF_ANTHROPIC_MAX_RETRIES", "3")),
         anthropic_request_delay=float(os.environ.get("SF_ANTHROPIC_REQUEST_DELAY", "1.0")),
     )

@@ -334,6 +334,22 @@ class TestParseDocumentRecord:
         record = parse_document_record(yaml_str, "test.pdf")
         assert record.parties.to is None
 
+    def test_strips_markdown_yaml_fences(self) -> None:
+        yaml_str = "```yaml\ndoc_type: receipt\nparties:\n  from: Shop\n```\n"
+        record = parse_document_record(yaml_str, "test.pdf")
+        assert record.doc_type == "receipt"
+        assert record.parties.from_ == "Shop"
+
+    def test_strips_markdown_yml_fences(self) -> None:
+        yaml_str = "```yml\ndoc_type: contract\n```\n"
+        record = parse_document_record(yaml_str, "test.pdf")
+        assert record.doc_type == "contract"
+
+    def test_strips_plain_markdown_fences(self) -> None:
+        yaml_str = "```\ndoc_type: report\n```\n"
+        record = parse_document_record(yaml_str, "test.pdf")
+        assert record.doc_type == "report"
+
 
 # ---------------------------------------------------------------------------
 # _get_or_extract_metadata tests

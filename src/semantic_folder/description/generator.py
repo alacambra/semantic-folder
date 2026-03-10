@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -66,6 +67,15 @@ def generate_description(
     )
 
 
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:ya?ml)?\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Strip markdown code fences from LLM output if present."""
+    match = _MARKDOWN_FENCE_RE.search(text)
+    return match.group(1) if match else text
+
+
 def parse_document_record(yaml_str: str, filename: str) -> DocumentRecord:
     """Parse a raw YAML string from the LLM into a DocumentRecord.
 
@@ -82,8 +92,9 @@ def parse_document_record(yaml_str: str, filename: str) -> DocumentRecord:
     Raises:
         ValueError: If the YAML cannot be parsed at all.
     """
+    cleaned = _strip_markdown_fences(yaml_str)
     try:
-        data = yaml.safe_load(yaml_str)
+        data = yaml.safe_load(cleaned)
     except yaml.YAMLError as exc:
         raise ValueError(f"Failed to parse YAML: {exc}") from exc
 

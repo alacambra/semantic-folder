@@ -22,7 +22,7 @@ All 8 deliverables (D1-D8) were implemented plus a post-review enhancement (D9: 
 | --- | --- | --- |
 | Lint | `make lint` | PASS -- 0 errors, 37 files formatted |
 | Typecheck | `make typecheck` | PASS -- 0 errors, 0 warnings |
-| Test | `make test` | PASS -- 221 passed, 3 skipped, 93% coverage |
+| Test | `make test` | PASS -- 224 passed, 3 skipped, 93% coverage |
 
 ## Acceptance Criteria Verification
 
@@ -30,7 +30,7 @@ All 8 deliverables (D1-D8) were implemented plus a post-review enhancement (D9: 
 | --- | --- | --- | --- |
 | 1 | `make lint` passes | PASS | ruff check + format: all checks passed, 37 files already formatted |
 | 2 | `make typecheck` passes | PASS | pyright: 0 errors, 0 warnings, 0 informations |
-| 3 | `make test` passes with all new and existing tests | PASS | 221 passed, 3 skipped (integration tests without credentials) |
+| 3 | `make test` passes with all new and existing tests | PASS | 224 passed, 3 skipped (integration tests without credentials) |
 | 4 | `FileDescription` class is removed from `description/models.py` | PASS | `grep -r FileDescription src/` returns no matches |
 | 5 | `to_markdown()` method is removed from `FolderDescription` | PASS | `grep -r to_markdown src/` returns no matches |
 | 6 | `FolderDescription.to_yaml()` produces valid YAML matching design structure | PASS | `TestToYaml` (10 tests) verifies folder block, documents list, envelope fields, flow-style tags, facts omission, round-trip validity |
@@ -103,7 +103,7 @@ Test counts by file:
 | --- | --- | --- | --- |
 | test_models.py | TestDocumentRecord (4), TestFolderDescription (3), TestToYaml (10), TestDocTypes (2) | 19 | PASS |
 | test_describer.py | TestExtractMetadata (8) added; existing tests preserved | 8 new | PASS |
-| test_generator.py | TestGenerateDescription (12), TestGenerateDescriptionWithCache (6), TestParseDocumentRecord (12), TestGetOrExtractMetadata (4) | 34 | PASS |
+| test_generator.py | TestGenerateDescription (12), TestGenerateDescriptionWithCache (6), TestParseDocumentRecord (15), TestGetOrExtractMetadata (4) | 37 | PASS |
 | test_processor.py | Updated _make_processor mock, 5 tests updated | 5 updated | PASS |
 | test_config.py | 2 new tests for .yaml defaults | 2 new | PASS |
 
@@ -118,6 +118,27 @@ CLAUDE.md was removed from the repository by the user. This deliverable is no lo
 - `describer.py`: imports `DOC_TYPES`, generates allowed values dynamically via `", ".join(sorted(DOC_TYPES))` into `{allowed_doc_types}` prompt placeholder
 - Eliminates N4 sync risk: both validation and LLM prompt draw from same YAML file
 - Doc types can be added/removed with a single-line YAML edit, no code changes needed
+
+### D10: Production bugfixes -- PASS (post-deployment fixes)
+
+Three issues discovered from production logs after first deployment:
+
+**Fix 1: Markdown fence stripping in `parse_document_record()`**
+- Root cause: LLM wraps YAML output in markdown fences (`` ```yaml ... ``` ``) despite prompt instruction
+- `_strip_markdown_fences()` added to `generator.py` using regex to strip `` ```yaml ``, `` ```yml ``, and plain `` ``` `` fences
+- Called at the start of `parse_document_record()` before `yaml.safe_load()`
+- 3 new tests: `test_strips_markdown_yaml_fences`, `test_strips_markdown_yml_fences`, `test_strips_plain_markdown_fences`
+
+**Fix 2: Cache prefix change to avoid poisoned entries**
+- Root cause: pre-IT-9 cache entries (one-sentence summaries) are keyed by content hash and returned by `_get_or_extract_metadata()`, but fail `parse_document_record()` ("Expected a YAML mapping, got str")
+- Default `cache_blob_prefix` changed from `"summary-cache/"` to `"metadata-cache/"` in `config.py`, `cache.py`, and `load_config()`
+- Old cache entries at `summary-cache/` prefix are automatically ignored -- no manual cleanup needed
+- 2 tests updated in `test_config.py`
+
+**Fix 3: Exclude description files from folder listing**
+- Root cause: `list_folder()` included `folder_description.yaml` and old `folder_description.md` as regular documents, causing them to be sent to the LLM for extraction
+- `list_folder()` in `processor.py` now filters out both `folder_description.yaml` (configured filename) and `folder_description.md` (legacy) from the files and file_ids lists
+- 1 new test: `test_excludes_description_files_from_listing`
 
 ## Traceability Analysis
 
@@ -157,7 +178,7 @@ CLAUDE.md was removed from the repository by the user. This deliverable is no lo
 | F16: Parties from_ -> from YAML mapping | `to_yaml()` maps `from_` to `from` at models.py:145 | Resolved |
 | F18: CLAUDE.md update | CLAUDE.md removed from repo; deliverable N/A | Resolved |
 | N4: DOC_TYPES sync | Resolved by D9: DOC_TYPES loaded from `resources/doc_types.yaml`; prompt generated dynamically from same source | Resolved |
-| N15: Cache semantic change | Self-healing; old entries produce fallback records until overwritten | Noted |
+| N15: Cache semantic change | Resolved by D10: cache prefix changed to `metadata-cache/`; old entries ignored | Resolved |
 
 ## Files Changed
 
@@ -182,6 +203,6 @@ CLAUDE.md was removed from the repository by the user. This deliverable is no lo
 
 ## Risks and Notes
 
-- **Cache semantic change**: Existing pre-IT-9 cache entries (one-sentence summaries) will produce fallback `DocumentRecord` results until overwritten by fresh extractions. This is self-healing behavior -- no manual intervention needed.
+- **Cache semantic change**: Resolved by D10 -- cache prefix changed from `summary-cache/` to `metadata-cache/`, so old one-sentence summary entries are automatically ignored. No manual cache clearing needed.
 - **No migration**: Old `folder_description.md` files in OneDrive remain untouched. New runs produce `folder_description.yaml`. Both may coexist temporarily.
 - **summarize_file() preserved**: The old `summarize_file()` method and all `_summarize_*` helpers remain in `AnthropicDescriber` for potential future use. `generate_description()` no longer calls them.

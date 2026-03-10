@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from semantic_folder.description.cache import SummaryCache, summary_cache_from_config
@@ -25,9 +27,13 @@ from semantic_folder.graph.models import (
 )
 
 if TYPE_CHECKING:
+    from typing import Any
+
     from semantic_folder.config import AppConfig
 
 logger = logging.getLogger(__name__)
+
+ODATA_NEXT_LINK = "@odata.nextLink"
 
 
 class FolderProcessor:
@@ -39,8 +45,10 @@ class FolderProcessor:
         graph_client: GraphClient,
         drive_user: str,
         describer: AnthropicDescriber,
-        folder_description_filename: str = "folder_description.yaml",
+        folder_description_filename: str = "folder_description.json",
         cache: SummaryCache | None = None,
+        index_filename: str = "onedrive_index.json",
+        index_owner: str = "Datamantics UG (Albert Lacambra Basil)",
     ) -> None:
         """Initialise the folder processor.
 
@@ -51,6 +59,8 @@ class FolderProcessor:
             describer: AnthropicDescriber instance for AI description generation.
             folder_description_filename: Name of the description file to generate and upload.
             cache: Optional SummaryCache for skipping redundant LLM calls.
+            index_filename: Name of the root index file to generate.
+            index_owner: Owner name to include in the index metadata.
         """
         self._delta = delta_processor
         self._graph = graph_client
@@ -58,6 +68,8 @@ class FolderProcessor:
         self._describer = describer
         self._folder_description_filename = folder_description_filename
         self._cache = cache
+        self._index_filename = index_filename
+        self._index_owner = index_owner
 
     def resolve_folders(self, items: list[DriveItem]) -> list[str]:
         """Deduplicate parent folder IDs from non-deleted, non-folder items.
@@ -103,7 +115,11 @@ class FolderProcessor:
             parent_ref = children[0].get(FIELD_PARENT_REFERENCE, {})
             folder_path = parent_ref.get(FIELD_PATH, "")
 
-        excluded = {self._folder_description_filename, "folder_description.md"}
+        excluded = {
+            self._folder_description_filename,
+            "folder_description.yaml",
+            "folder_description.md",
+        }
         files = [
             child[FIELD_NAME]
             for child in children
@@ -152,7 +168,7 @@ class FolderProcessor:
 
         Reads file content for each file in the listing, generates an
         AI description using the Anthropic describer, serializes the
-        result to YAML, and uploads it as ``folder_description.yaml``
+        result to JSON, and uploads it as ``folder_description.json``
         (or the configured filename) to the folder in OneDrive.
 
         Args:
@@ -160,17 +176,153 @@ class FolderProcessor:
         """
         file_contents = self.read_file_contents(listing)
         description = generate_description(listing, self._describer, file_contents, self._cache)
-        content = description.to_yaml().encode("utf-8")
+        content = description.to_json().encode("utf-8")
         path = (
             f"/users/{self._drive_user}/drive/items/{listing.folder_id}"
             f":/{self._folder_description_filename}:/content"
         )
-        self._graph.put_content(path, content)
+        self._graph.put_content(path, content, content_type="application/json")
         logger.info(
             "[upload_description] uploaded description; folder_path:%s;document_count:%d",
             listing.folder_path,
             len(description.documents),
         )
+
+    def update_index(self) -> None:
+        """Search for all folder_description.json files, build index, upload.
+
+        Uses the Graph search API to find all folder description files,
+        downloads each one, extracts folder and overview data, and
+        uploads a root-level index file.
+
+        Follows @odata.nextLink pagination until exhausted.
+        """
+        logger.info("[update_index] searching for folder description files")
+        search_path = (
+            f"/users/{self._drive_user}/drive/root/search(q='{self._folder_description_filename}')"
+        )
+
+        all_items: list[dict[str, Any]] = []
+        response = self._graph.get(search_path)
+        all_items.extend(response.get(ODATA_VALUE, []))
+
+        while ODATA_NEXT_LINK in response:
+            next_url = response[ODATA_NEXT_LINK]
+            # nextLink is a full URL; extract the path portion
+            from semantic_folder.graph.client import GRAPH_BASE_URL
+
+            if next_url.startswith(GRAPH_BASE_URL):
+                next_path = next_url[len(GRAPH_BASE_URL) :]
+            else:
+                next_path = next_url
+            response = self._graph.get(next_path)
+            all_items.extend(response.get(ODATA_VALUE, []))
+
+        # Filter to exact filename matches (search may return partial matches)
+        description_items = [
+            item for item in all_items if item.get(FIELD_NAME) == self._folder_description_filename
+        ]
+
+        folders: list[dict[str, Any]] = []
+        for item in description_items:
+            item_id = item.get(FIELD_ID)
+            if not item_id:
+                continue
+            try:
+                content_bytes = self._graph.get_content(
+                    f"/users/{self._drive_user}/drive/items/{item_id}/content"
+                )
+                data = json.loads(content_bytes)
+            except Exception:
+                logger.warning(
+                    "[update_index] failed to read description; item_id:%s",
+                    item_id,
+                )
+                continue
+
+            folder_data = data.get("folder", {})
+            overview_data = data.get("overview", {})
+            folders.append(
+                {
+                    "path": folder_data.get("path", ""),
+                    "type": folder_data.get("type", ""),
+                    "period": folder_data.get("period"),
+                    "document_count": overview_data.get("document_count", 0),
+                    "total_eur": overview_data.get("total_amount_eur", 0.0),
+                }
+            )
+
+        index = {
+            "schema_version": "1.0",
+            "updated_at": datetime.now(tz=UTC).strftime("%Y-%m-%d"),
+            "owner": self._index_owner,
+            "folders": folders,
+        }
+
+        index_content = (json.dumps(index, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        index_path = f"/users/{self._drive_user}/drive/root:/{self._index_filename}:/content"
+        self._graph.put_content(index_path, index_content, content_type="application/json")
+        logger.info(
+            "[update_index] uploaded index; folder_count:%d",
+            len(folders),
+        )
+
+    def cleanup_legacy_descriptions(self, *, dry_run: bool = False) -> list[str]:
+        """Find and delete all legacy folder_description.yaml/.md files.
+
+        Uses Graph search API to find files, then deletes each via
+        DELETE /users/{drive_user}/drive/items/{item_id}.
+
+        Args:
+            dry_run: If True, return paths without deleting.
+
+        Returns:
+            List of deleted (or would-be-deleted) file paths.
+        """
+        legacy_names = {"folder_description.yaml", "folder_description.md"}
+        deleted_paths: list[str] = []
+
+        for query_name in legacy_names:
+            search_path = f"/users/{self._drive_user}/drive/root/search(q='{query_name}')"
+            response = self._graph.get(search_path)
+            items: list[dict[str, Any]] = list(response.get(ODATA_VALUE, []))
+
+            while ODATA_NEXT_LINK in response:
+                next_url = response[ODATA_NEXT_LINK]
+                from semantic_folder.graph.client import GRAPH_BASE_URL
+
+                if next_url.startswith(GRAPH_BASE_URL):
+                    next_path = next_url[len(GRAPH_BASE_URL) :]
+                else:
+                    next_path = next_url
+                response = self._graph.get(next_path)
+                items.extend(response.get(ODATA_VALUE, []))
+
+            for item in items:
+                if item.get(FIELD_NAME) != query_name:
+                    continue
+                item_id = item.get(FIELD_ID)
+                if not item_id:
+                    continue
+
+                parent_ref = item.get(FIELD_PARENT_REFERENCE, {})
+                parent_path = parent_ref.get(FIELD_PATH, "")
+                file_path = f"{parent_path}/{query_name}"
+
+                if dry_run:
+                    logger.info(
+                        "[cleanup_legacy] would delete; path:%s",
+                        file_path,
+                    )
+                else:
+                    self._graph.delete(f"/users/{self._drive_user}/drive/items/{item_id}")
+                    logger.info(
+                        "[cleanup_legacy] deleted; path:%s",
+                        file_path,
+                    )
+                deleted_paths.append(file_path)
+
+        return deleted_paths
 
     def process_delta(self) -> list[FolderListing]:
         """Run the full delta-to-folder-listing pipeline.
@@ -181,12 +333,13 @@ class FolderProcessor:
             3. Resolve unique parent folder IDs from changed file items.
             4. Enumerate each folder's children to build FolderListing objects.
             5. Generate and upload a description file for each folder.
-            6. Persist the new delta token.
-            7. Return the list of FolderListing objects.
+            6. Update the root index file.
+            7. Persist the new delta token.
+            8. Return the list of FolderListing objects.
 
-        Descriptions are uploaded before the delta token is saved so that
-        a failed upload does not advance the token, allowing retry on the
-        next cycle.
+        Descriptions and index are uploaded before the delta token is saved
+        so that a failed upload does not advance the token, allowing retry
+        on the next cycle.
 
         Returns:
             List of FolderListing objects for folders that were processed.
@@ -200,6 +353,8 @@ class FolderProcessor:
         listings = [self.list_folder(fid) for fid in folder_ids]
         for listing in listings:
             self.upload_description(listing)
+        if listings:
+            self.update_index()
         self._delta.save_delta_token(new_token)
         logger.info("[process_delta] pipeline complete; listing_count:%d", len(listings))
         return listings
@@ -228,4 +383,6 @@ def folder_processor_from_config(config: AppConfig) -> FolderProcessor:
         describer=describer,
         folder_description_filename=config.folder_description_filename,
         cache=cache,
+        index_filename=config.index_filename,
+        index_owner=config.index_owner,
     )

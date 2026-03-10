@@ -1,0 +1,28 @@
+{
+  "doc_types": [
+    "amendment",
+    "bank-statement",
+    "certificate",
+    "contract",
+    "correspondence",
+    "employment-doc",
+    "government-letter",
+    "insurance-claim",
+    "insurance-letter",
+    "insurance-policy",
+    "invoice-incoming",
+    "invoice-outgoing",
+    "nda",
+    "other",
+    "payment-confirmation",
+    "project-doc",
+    "proposal",
+    "receipt",
+    "reference-material",
+    "registration",
+    "report",
+    "tax-declaration",
+    "tax-notice",
+    "terms-of-service"
+  ]
+}

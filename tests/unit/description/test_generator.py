@@ -8,39 +8,34 @@ import pytest
 from semantic_folder.description.cache import SummaryCache
 from semantic_folder.description.generator import (
     _get_or_extract_metadata,
+    _infer_period,
     generate_description,
     parse_document_record,
 )
-from semantic_folder.description.models import DocumentRecord, FolderDescription
+from semantic_folder.description.models import DocumentRecord, FolderDescription, Parties
 from semantic_folder.graph.models import FolderListing
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-_VALID_YAML = """\
-file: "{name}"
-doc_type: other
-doc_lang: en
-date: "2026-01-01"
-parties:
-  from: unknown
-  to: null
-summary: Mock extraction of {name}
-tags: [test]
-facts: {{}}
-"""
+_VALID_JSON = (
+    '{{"file": "{name}", "doc_type": "other", "doc_lang": "en",'
+    ' "date": "2026-01-01", "parties": {{"from": "unknown", "to": null}},'
+    ' "summary": "Mock extraction of {name}",'
+    ' "tags": ["test"], "facts": {{}}}}'
+)
 
 
-def _make_yaml(name: str) -> str:
-    return _VALID_YAML.format(name=name)
+def _make_json(name: str) -> str:
+    return _VALID_JSON.format(name=name)
 
 
 def _make_describer_mock() -> MagicMock:
     """Return a mock AnthropicDescriber."""
     mock = MagicMock()
     mock.classify_folder.return_value = "project-docs"
-    mock.extract_metadata.side_effect = lambda name, content: _make_yaml(name)
+    mock.extract_metadata.side_effect = lambda name, content: _make_json(name)
     return mock
 
 
@@ -176,7 +171,7 @@ class TestGenerateDescriptionWithCache:
         listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt"])
         describer = _make_describer_mock()
         cache = _make_cache_mock()
-        cache.get.return_value = _make_yaml("a.txt")
+        cache.get.return_value = _make_json("a.txt")
 
         result = generate_description(listing, describer, {"a.txt": b"content"}, cache=cache)
 
@@ -210,7 +205,7 @@ class TestGenerateDescriptionWithCache:
         listing = FolderListing(folder_id="f1", folder_path="/p", files=["a.txt"])
         describer = _make_describer_mock()
         cache = _make_cache_mock()
-        cache.get.return_value = _make_yaml("a.txt")
+        cache.get.return_value = _make_json("a.txt")
 
         generate_description(listing, describer, {"a.txt": b"data"}, cache=cache)
 
@@ -224,7 +219,7 @@ class TestGenerateDescriptionWithCache:
         )
         describer = _make_describer_mock()
         cache = _make_cache_mock()
-        cache.get.side_effect = [_make_yaml("cached.txt"), None]
+        cache.get.side_effect = [_make_json("cached.txt"), None]
 
         result = generate_description(
             listing,
@@ -253,22 +248,14 @@ class TestGenerateDescriptionWithCache:
 
 
 class TestParseDocumentRecord:
-    def test_parses_valid_yaml_into_document_record(self) -> None:
-        yaml_str = (
-            'file: "invoice.pdf"\n'
-            "doc_type: invoice-incoming\n"
-            "doc_lang: de\n"
-            'date: "2026-01-15"\n'
-            "parties:\n"
-            "  from: Acme Corp\n"
-            "  to: Datamantics UG\n"
-            "summary: An invoice for consulting.\n"
-            "tags: [invoice, consulting]\n"
-            "facts:\n"
-            "  amount: 1500.0\n"
-            "  currency: EUR\n"
+    def test_parses_valid_json_into_document_record(self) -> None:
+        json_str = (
+            '{"file": "invoice.pdf", "doc_type": "invoice-incoming", "doc_lang": "de",'
+            ' "date": "2026-01-15", "parties": {"from": "Acme Corp", "to": "Datamantics UG"},'
+            ' "summary": "An invoice for consulting.", "tags": ["invoice", "consulting"],'
+            ' "facts": {"amount": 1500.0, "currency": "EUR"}}'
         )
-        record = parse_document_record(yaml_str, "fallback.pdf")
+        record = parse_document_record(json_str, "fallback.pdf")
         assert record.file == "invoice.pdf"
         assert record.doc_type == "invoice-incoming"
         assert record.doc_lang == "de"
@@ -280,75 +267,80 @@ class TestParseDocumentRecord:
         assert record.facts == {"amount": 1500.0, "currency": "EUR"}
 
     def test_unknown_doc_type_falls_back_to_other(self) -> None:
-        yaml_str = "doc_type: banana-split\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "banana-split"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.doc_type == "other"
 
     def test_missing_parties_defaults_to_unknown(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.parties.from_ == "unknown"
         assert record.parties.to is None
 
     def test_missing_tags_defaults_to_empty_list(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.tags == []
 
     def test_missing_facts_defaults_to_empty_dict(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.facts == {}
 
     def test_missing_doc_lang_defaults_to_und(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.doc_lang == "und"
 
     def test_missing_date_defaults_to_empty_string(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.date == ""
 
     def test_missing_summary_defaults_to_empty_string(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.summary == ""
 
     def test_filename_fallback_when_file_field_missing(self) -> None:
-        yaml_str = "doc_type: other\n"
-        record = parse_document_record(yaml_str, "fallback_name.pdf")
+        json_str = '{"doc_type": "other"}'
+        record = parse_document_record(json_str, "fallback_name.pdf")
         assert record.file == "fallback_name.pdf"
 
-    def test_raises_value_error_on_unparseable_yaml(self) -> None:
-        with pytest.raises(ValueError, match="Failed to parse YAML"):
-            parse_document_record("{{{{invalid yaml:::::", "test.pdf")
+    def test_raises_value_error_on_unparseable_json(self) -> None:
+        with pytest.raises(ValueError, match="Failed to parse JSON"):
+            parse_document_record("{{{{invalid json:::::", "test.pdf")
 
     def test_parties_from_key_mapped_to_from_underscore(self) -> None:
-        yaml_str = "parties:\n  from: Sender Corp\n  to: Receiver Ltd\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"parties": {"from": "Sender Corp", "to": "Receiver Ltd"}}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.parties.from_ == "Sender Corp"
 
     def test_parties_to_null_maps_to_none(self) -> None:
-        yaml_str = "parties:\n  from: Sender\n  to: null\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        json_str = '{"parties": {"from": "Sender", "to": null}}'
+        record = parse_document_record(json_str, "test.pdf")
         assert record.parties.to is None
 
     def test_strips_markdown_yaml_fences(self) -> None:
-        yaml_str = "```yaml\ndoc_type: receipt\nparties:\n  from: Shop\n```\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        fenced = '```yaml\n{"doc_type": "receipt", "parties": {"from": "Shop"}}\n```\n'
+        record = parse_document_record(fenced, "test.pdf")
         assert record.doc_type == "receipt"
         assert record.parties.from_ == "Shop"
 
     def test_strips_markdown_yml_fences(self) -> None:
-        yaml_str = "```yml\ndoc_type: contract\n```\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        fenced = '```yml\n{"doc_type": "contract"}\n```\n'
+        record = parse_document_record(fenced, "test.pdf")
         assert record.doc_type == "contract"
 
     def test_strips_plain_markdown_fences(self) -> None:
-        yaml_str = "```\ndoc_type: report\n```\n"
-        record = parse_document_record(yaml_str, "test.pdf")
+        fenced = '```\n{"doc_type": "report"}\n```\n'
+        record = parse_document_record(fenced, "test.pdf")
         assert record.doc_type == "report"
+
+    def test_strips_markdown_json_fences(self) -> None:
+        json_str = '```json\n{"doc_type": "receipt"}\n```'
+        record = parse_document_record(json_str, "test.pdf")
+        assert record.doc_type == "receipt"
 
 
 # ---------------------------------------------------------------------------
@@ -366,13 +358,13 @@ class TestGetOrExtractMetadata:
     def test_cache_hit_returns_cached_and_skips_llm(self) -> None:
         describer = _make_describer_mock()
         cache = _make_cache_mock()
-        cache.get.return_value = "cached yaml string"
+        cache.get.return_value = "cached json string"
 
         result = _get_or_extract_metadata("a.txt", b"content", describer, cache)
 
         describer.extract_metadata.assert_not_called()
         cache.put.assert_not_called()
-        assert result == "cached yaml string"
+        assert result == "cached json string"
 
     def test_cache_miss_calls_llm_and_stores(self) -> None:
         describer = _make_describer_mock()
@@ -395,3 +387,39 @@ class TestGetOrExtractMetadata:
         cache.put.assert_not_called()
         describer.extract_metadata.assert_called_once_with("a.txt", b"")
         assert "a.txt" in result
+
+
+# ---------------------------------------------------------------------------
+# _infer_period tests
+# ---------------------------------------------------------------------------
+
+
+def _doc(file: str, date: str) -> DocumentRecord:
+    return DocumentRecord(
+        file=file,
+        doc_type="other",
+        doc_lang="en",
+        date=date,
+        parties=Parties(from_="unknown"),
+        summary="",
+    )
+
+
+class TestInferPeriod:
+    def test_same_month_returns_period(self) -> None:
+        docs = [
+            _doc("a.pdf", "2026-03-01"),
+            _doc("b.pdf", "2026-03-15"),
+            _doc("c.pdf", "2026-03-28"),
+        ]
+        assert _infer_period(docs) == "2026-03"
+
+    def test_different_months_returns_none(self) -> None:
+        docs = [
+            _doc("a.pdf", "2026-03-01"),
+            _doc("b.pdf", "2026-04-15"),
+        ]
+        assert _infer_period(docs) is None
+
+    def test_empty_documents_returns_none(self) -> None:
+        assert _infer_period([]) is None

@@ -21,15 +21,9 @@ def _make_processor() -> tuple[FolderProcessor, MagicMock, MagicMock, MagicMock]
     mock_describer = MagicMock()
     mock_describer.classify_folder.return_value = "project-docs"
     mock_describer.extract_metadata.side_effect = lambda name, content: (
-        f'file: "{name}"\n'
-        f"doc_type: other\n"
-        f"doc_lang: en\n"
-        f'date: "2026-01-01"\n'
-        f"parties:\n"
-        f"  from: unknown\n"
-        f"  to: null\n"
-        f"summary: Mock extraction of {name}\n"
-        f"tags: [test]\n"
+        f'{{"file": "{name}", "doc_type": "other", "doc_lang": "en", '
+        f'"date": "2026-01-01", "parties": {{"from": "unknown", "to": null}}, '
+        f'"summary": "Mock extraction of {name}", "tags": ["test"], "facts": {{}}}}'
     )
     processor = FolderProcessor(
         delta_processor=mock_delta,
@@ -288,6 +282,11 @@ class TestListFolder:
                     "name": "folder_description.md",
                     "parentReference": {"id": "p1", "path": "/drive/root:/Docs"},
                 },
+                {
+                    "id": "f4",
+                    "name": "folder_description.json",
+                    "parentReference": {"id": "p1", "path": "/drive/root:/Docs"},
+                },
             ]
         }
 
@@ -429,7 +428,7 @@ class TestProcessDelta:
 
         mock_delta.get_delta_token.assert_called_once()
         mock_delta.fetch_changes.assert_called_once_with("existing-token")
-        mock_graph.get.assert_called_once_with(
+        mock_graph.get.assert_any_call(
             "/users/testuser@contoso.onmicrosoft.com/drive/items/folder-abc/children"
         )
         mock_delta.save_delta_token.assert_called_once_with("new-token")
@@ -525,7 +524,8 @@ class TestProcessDelta:
 
         processor.process_delta()
 
-        assert call_order == ["put_content", "save_delta_token"]
+        assert call_order[-1] == "save_delta_token"
+        assert all(c == "put_content" for c in call_order[:-1])
 
     def test_uploads_description_for_each_listing(self) -> None:
         """Each folder listing should trigger a put_content call."""
@@ -543,7 +543,7 @@ class TestProcessDelta:
 
         processor.process_delta()
 
-        assert mock_graph.put_content.call_count == 2
+        assert mock_graph.put_content.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -570,7 +570,7 @@ class TestUploadDescription:
         path = call_args[0][0]
         assert path == (
             "/users/testuser@contoso.onmicrosoft.com/drive/items/folder-abc"
-            ":/folder_description.yaml:/content"
+            ":/folder_description.json:/content"
         )
 
     def test_reads_file_contents_then_generates_description(self) -> None:
@@ -599,7 +599,7 @@ class TestUploadDescription:
         mock_graph = MagicMock()
         mock_describer = MagicMock()
         mock_describer.classify_folder.return_value = "docs"
-        mock_describer.extract_metadata.return_value = "doc_type: other\n"
+        mock_describer.extract_metadata.return_value = '{"doc_type": "other"}'
         processor = FolderProcessor(
             delta_processor=mock_delta,
             graph_client=mock_graph,
@@ -615,7 +615,7 @@ class TestUploadDescription:
         path = mock_graph.put_content.call_args[0][0]
         assert ":/custom_desc.md:/content" in path
 
-    def test_content_is_utf8_encoded_yaml(self) -> None:
+    def test_content_is_utf8_encoded_json(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
         mock_graph.get_content.return_value = b"data"
 
@@ -631,8 +631,8 @@ class TestUploadDescription:
         content = mock_graph.put_content.call_args[0][1]
         assert isinstance(content, bytes)
         text = content.decode("utf-8")
-        assert "folder:" in text
-        assert "documents:" in text
+        assert '"folder"' in text
+        assert '"documents"' in text
 
 
 # ---------------------------------------------------------------------------
@@ -670,11 +670,11 @@ class TestUploadDescriptionWithCache:
         mock_graph.get_content.return_value = b"data"
         mock_describer = MagicMock()
         mock_describer.classify_folder.return_value = "docs"
-        mock_describer.extract_metadata.return_value = "doc_type: other\n"
+        mock_describer.extract_metadata.return_value = '{"doc_type": "other"}'
 
         # Set up generate_description mock return
         mock_desc = MagicMock()
-        mock_desc.to_yaml.return_value = "folder:\n  path: /p\n"
+        mock_desc.to_json.return_value = '{"folder": {"path": "/p"}}\n'
         mock_desc.documents = []
         mock_gen_desc.return_value = mock_desc
 
@@ -702,7 +702,7 @@ class TestUploadDescriptionWithCache:
         mock_graph.get_content.return_value = b"data"
 
         mock_desc = MagicMock()
-        mock_desc.to_yaml.return_value = "folder:\n  path: /p\n"
+        mock_desc.to_json.return_value = '{"folder": {"path": "/p"}}\n'
         mock_desc.documents = []
         mock_gen_desc.return_value = mock_desc
 
@@ -721,6 +721,220 @@ class TestUploadDescriptionWithCache:
         mock_gen_desc.assert_called_once()
         call_kwargs = mock_gen_desc.call_args
         assert call_kwargs[0][3] is None
+
+
+# ---------------------------------------------------------------------------
+# update_index tests
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateIndex:
+    def test_searches_for_description_files(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {"value": []}
+
+        processor.update_index()
+
+        mock_graph.get.assert_called_once()
+        call_path = mock_graph.get.call_args[0][0]
+        assert "search(q='folder_description.json')" in call_path
+
+    def test_builds_index_from_found_descriptions(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {
+            "value": [
+                {"id": "desc-1", "name": "folder_description.json"},
+            ]
+        }
+        mock_graph.get_content.return_value = (
+            b'{"folder": {"path": "/drive/root:/Docs", "type": "project-docs"},'
+            b' "overview": {"document_count": 2, "total_amount_eur": 100.0}}'
+        )
+
+        processor.update_index()
+
+        # Should upload the index
+        assert mock_graph.put_content.call_count == 1
+        call_args = mock_graph.put_content.call_args
+        path = call_args[0][0]
+        assert "onedrive_index.json" in path
+
+        import json
+
+        content = json.loads(call_args[0][1].decode("utf-8"))
+        assert content["schema_version"] == "1.0"
+        assert len(content["folders"]) == 1
+        assert content["folders"][0]["path"] == "/drive/root:/Docs"
+        assert content["folders"][0]["document_count"] == 2
+
+    def test_filters_non_matching_filenames(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {
+            "value": [
+                {"id": "desc-1", "name": "folder_description.json"},
+                {"id": "desc-2", "name": "old_folder_description.json"},
+            ]
+        }
+        mock_graph.get_content.return_value = (
+            b'{"folder": {"path": "/p", "type": "t"}, "overview": {}}'
+        )
+
+        processor.update_index()
+
+        # get_content called only for exact match
+        mock_graph.get_content.assert_called_once()
+
+    def test_follows_pagination(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.side_effect = [
+            {
+                "value": [{"id": "d1", "name": "folder_description.json"}],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/next-page",
+            },
+            {
+                "value": [{"id": "d2", "name": "folder_description.json"}],
+            },
+        ]
+        mock_graph.get_content.return_value = (
+            b'{"folder": {"path": "/p", "type": "t"}, "overview": {"document_count": 1}}'
+        )
+
+        processor.update_index()
+
+        assert mock_graph.get.call_count == 2
+        assert mock_graph.get_content.call_count == 2
+
+    def test_skips_items_without_id(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {
+            "value": [
+                {"name": "folder_description.json"},  # no id
+            ]
+        }
+
+        processor.update_index()
+
+        mock_graph.get_content.assert_not_called()
+
+    def test_continues_on_read_failure(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {
+            "value": [
+                {"id": "d1", "name": "folder_description.json"},
+                {"id": "d2", "name": "folder_description.json"},
+            ]
+        }
+        mock_graph.get_content.side_effect = [
+            Exception("read error"),
+            b'{"folder": {"path": "/p2", "type": "t"}, "overview": {}}',
+        ]
+
+        processor.update_index()
+
+        import json
+
+        content = json.loads(mock_graph.put_content.call_args[0][1].decode("utf-8"))
+        assert len(content["folders"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# cleanup_legacy_descriptions tests
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupLegacyDescriptions:
+    def test_searches_for_yaml_and_md_files(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.return_value = {"value": []}
+
+        processor.cleanup_legacy_descriptions()
+
+        assert mock_graph.get.call_count == 2
+        calls = [c[0][0] for c in mock_graph.get.call_args_list]
+        search_queries = [c for c in calls if "search" in c]
+        assert len(search_queries) == 2
+
+    def test_deletes_matching_files(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.side_effect = [
+            {
+                "value": [
+                    {
+                        "id": "y1",
+                        "name": "folder_description.yaml",
+                        "parentReference": {"path": "/drive/root:/Docs"},
+                    },
+                ]
+            },
+            {"value": []},
+        ]
+
+        result = processor.cleanup_legacy_descriptions()
+
+        mock_graph.delete.assert_called_once()
+        delete_path = mock_graph.delete.call_args[0][0]
+        assert "y1" in delete_path
+        assert len(result) == 1
+        assert "folder_description.yaml" in result[0]
+
+    def test_dry_run_does_not_delete(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.side_effect = [
+            {
+                "value": [
+                    {
+                        "id": "y1",
+                        "name": "folder_description.yaml",
+                        "parentReference": {"path": "/drive/root:/Docs"},
+                    },
+                ]
+            },
+            {"value": []},
+        ]
+
+        result = processor.cleanup_legacy_descriptions(dry_run=True)
+
+        mock_graph.delete.assert_not_called()
+        assert len(result) == 1
+
+    def test_filters_non_matching_names(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.side_effect = [
+            {
+                "value": [
+                    {
+                        "id": "x1",
+                        "name": "other_description.yaml",
+                        "parentReference": {"path": "/drive/root:/Docs"},
+                    },
+                ]
+            },
+            {"value": []},
+        ]
+
+        result = processor.cleanup_legacy_descriptions()
+
+        mock_graph.delete.assert_not_called()
+        assert result == []
+
+    def test_skips_items_without_id(self) -> None:
+        processor, _, mock_graph, _ = _make_processor()
+        mock_graph.get.side_effect = [
+            {
+                "value": [
+                    {
+                        "name": "folder_description.yaml",
+                        "parentReference": {"path": "/drive/root:/Docs"},
+                    },
+                ]
+            },
+            {"value": []},
+        ]
+
+        result = processor.cleanup_legacy_descriptions()
+
+        mock_graph.delete.assert_not_called()
+        assert result == []
 
 
 class TestFolderProcessorFromConfig:

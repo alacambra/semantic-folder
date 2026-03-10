@@ -24,13 +24,15 @@ class AppConfig:
     # Domain constants — defaults provided, overridable via env
     delta_container: str = "semantic-folder-state"
     delta_blob: str = "delta-token/current.txt"
-    folder_description_filename: str = "folder_description.yaml"
+    folder_description_filename: str = "folder_description.json"
     anthropic_model: str = "claude-haiku-4-5-20251001"
     max_file_content_bytes: int = 8192
     cache_container: str = "semantic-folder-state"
-    cache_blob_prefix: str = "metadata-cache/"
+    cache_blob_prefix: str = "json-metadata-cache/"
     anthropic_max_retries: int = 3
     anthropic_request_delay: float = 1.0
+    index_filename: str = "onedrive_index.json"
+    index_owner: str = "Datamantics UG (Albert Lacambra Basil)"
 
 
 def load_config() -> AppConfig:
@@ -68,12 +70,14 @@ def load_config() -> AppConfig:
         delta_container=os.environ.get("SF_DELTA_CONTAINER", "semantic-folder-state"),
         delta_blob=os.environ.get("SF_DELTA_BLOB", "delta-token/current.txt"),
         folder_description_filename=os.environ.get(
-            "SF_FOLDER_DESCRIPTION_FILENAME", "folder_description.yaml"
+            "SF_FOLDER_DESCRIPTION_FILENAME", "folder_description.json"
         ),
         anthropic_model=os.environ.get("SF_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         max_file_content_bytes=int(os.environ.get("SF_MAX_FILE_CONTENT_BYTES", "8192")),
         cache_container=os.environ.get("SF_CACHE_CONTAINER", "semantic-folder-state"),
-        cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "metadata-cache/"),
+        cache_blob_prefix=os.environ.get("SF_CACHE_BLOB_PREFIX", "json-metadata-cache/"),
         anthropic_max_retries=int(os.environ.get("SF_ANTHROPIC_MAX_RETRIES", "3")),
         anthropic_request_delay=float(os.environ.get("SF_ANTHROPIC_REQUEST_DELAY", "1.0")),
+        index_filename=os.environ.get("SF_INDEX_FILENAME", "onedrive_index.json"),
+        index_owner=os.environ.get("SF_INDEX_OWNER", "Datamantics UG (Albert Lacambra Basil)"),
     )

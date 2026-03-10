@@ -66,3 +66,40 @@ def manual_trigger(req: func.HttpRequest) -> func.HttpResponse:
         logger.error("[manual_trigger] manual trigger failed", exc_info=True)
         error_body = json.dumps({"status": "error", "message": "Internal server error"})
         return func.HttpResponse(error_body, status_code=500, mimetype="application/json")
+
+
+@bp.route(route="cleanup", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+def cleanup_legacy(req: func.HttpRequest) -> func.HttpResponse:
+    """Delete legacy .yaml and .md folder description files from OneDrive.
+
+    Requires a function key for authentication. Pass ?dry_run=true to
+    list files without deleting them.
+    """
+    logger.info("[cleanup_legacy] cleanup requested")
+
+    try:
+        dry_run = req.params.get("dry_run", "").lower() == "true"
+        config = load_config()
+        processor = folder_processor_from_config(config)
+        deleted = processor.cleanup_legacy_descriptions(dry_run=dry_run)
+
+        logger.info(
+            "[cleanup_legacy] cleanup complete; deleted_count:%d;dry_run:%s",
+            len(deleted),
+            dry_run,
+        )
+
+        body = json.dumps(
+            {
+                "status": "ok",
+                "deleted": deleted,
+                "deleted_count": len(deleted),
+                "dry_run": dry_run,
+            }
+        )
+        return func.HttpResponse(body, status_code=200, mimetype="application/json")
+
+    except Exception:
+        logger.error("[cleanup_legacy] cleanup failed", exc_info=True)
+        error_body = json.dumps({"status": "error", "message": "Internal server error"})
+        return func.HttpResponse(error_body, status_code=500, mimetype="application/json")

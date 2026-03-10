@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
-
-import yaml
 
 from semantic_folder.description.cache import SummaryCache
 from semantic_folder.description.models import (
@@ -46,8 +45,8 @@ def generate_description(
     for name in listing.files:
         content = file_contents.get(name, b"")
         try:
-            yaml_str = _get_or_extract_metadata(name, content, describer, cache)
-            record = parse_document_record(yaml_str, name)
+            json_str = _get_or_extract_metadata(name, content, describer, cache)
+            record = parse_document_record(json_str, name)
         except (ValueError, Exception):
             logger.exception("[generate_description] extraction failed; filename:%s", name)
             record = DocumentRecord(
@@ -59,15 +58,35 @@ def generate_description(
                 summary="[extraction failed]",
             )
         documents.append(record)
+
+    # Infer period from document dates
+    period = _infer_period(documents)
+
     return FolderDescription(
         folder_path=listing.folder_path,
         folder_type=folder_type,
         documents=documents,
         updated_at=datetime.now(tz=UTC).strftime("%Y-%m-%d"),
+        period=period,
     )
 
 
-_MARKDOWN_FENCE_RE = re.compile(r"^```(?:ya?ml)?\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+def _infer_period(documents: list[DocumentRecord]) -> str | None:
+    """Infer a common period from document dates.
+
+    If all non-empty dates share the same YYYY-MM, return that as
+    the period string. Otherwise return None.
+    """
+    months: set[str] = set()
+    for doc in documents:
+        if doc.date and len(doc.date) >= 7:
+            months.add(doc.date[:7])
+    if len(months) == 1:
+        return months.pop()
+    return None
+
+
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json|ya?ml)?\s*\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -76,30 +95,30 @@ def _strip_markdown_fences(text: str) -> str:
     return match.group(1) if match else text
 
 
-def parse_document_record(yaml_str: str, filename: str) -> DocumentRecord:
-    """Parse a raw YAML string from the LLM into a DocumentRecord.
+def parse_document_record(json_str: str, filename: str) -> DocumentRecord:
+    """Parse a raw JSON string from the LLM into a DocumentRecord.
 
     Validates doc_type against DOC_TYPES. Falls back to "other" for
     unknown types. Handles missing or malformed fields gracefully.
 
     Args:
-        yaml_str: Raw YAML string returned by the LLM.
+        json_str: Raw JSON string returned by the LLM.
         filename: Original filename (used as fallback for the file field).
 
     Returns:
         Validated DocumentRecord instance.
 
     Raises:
-        ValueError: If the YAML cannot be parsed at all.
+        ValueError: If the JSON cannot be parsed at all.
     """
-    cleaned = _strip_markdown_fences(yaml_str)
+    cleaned = _strip_markdown_fences(json_str)
     try:
-        data = yaml.safe_load(cleaned)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Failed to parse YAML: {exc}") from exc
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Failed to parse JSON: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ValueError(f"Expected a YAML mapping, got {type(data).__name__}")
+        raise ValueError(f"Expected a JSON object, got {type(data).__name__}")
 
     doc_type = data.get("doc_type", "other")
     if doc_type not in DOC_TYPES:
@@ -141,7 +160,7 @@ def _get_or_extract_metadata(
     describer: AnthropicDescriber,
     cache: SummaryCache | None,
 ) -> str:
-    """Return cached metadata YAML or extract fresh metadata.
+    """Return cached metadata JSON or extract fresh metadata.
 
     Same cache pattern as the old _get_or_generate_summary: check cache
     by content hash, call describer.extract_metadata on miss, store result.
@@ -153,7 +172,7 @@ def _get_or_extract_metadata(
         cache: Optional cache to check/populate.
 
     Returns:
-        Raw YAML metadata string.
+        Raw JSON metadata string.
     """
     if cache is not None and content:
         content_hash = SummaryCache.content_hash(content)

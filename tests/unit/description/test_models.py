@@ -1,6 +1,6 @@
 """Unit tests for description/models.py -- DocumentRecord, Parties, FolderDescription, DOC_TYPES."""
 
-import yaml
+import json
 
 from semantic_folder.description.models import (
     DOC_TYPES,
@@ -100,7 +100,7 @@ class TestFolderDescription:
 
 
 # ---------------------------------------------------------------------------
-# to_yaml() tests
+# to_json() tests
 # ---------------------------------------------------------------------------
 
 
@@ -127,15 +127,15 @@ def _make_record(
     )
 
 
-class TestToYaml:
+class TestToJson:
     def test_produces_folder_block_with_path_type_updated_at(self) -> None:
         desc = FolderDescription(
             folder_path="/drive/root:/Docs",
             folder_type="invoices",
             updated_at="2026-03-10",
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         assert parsed["folder"]["path"] == "/drive/root:/Docs"
         assert parsed["folder"]["type"] == "invoices"
         assert parsed["folder"]["updated_at"] == "2026-03-10"
@@ -147,8 +147,8 @@ class TestToYaml:
             documents=[_make_record(file="a.pdf"), _make_record(file="b.pdf")],
             updated_at="2026-01-01",
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         assert len(parsed["documents"]) == 2
         assert parsed["documents"][0]["file"] == "a.pdf"
         assert parsed["documents"][1]["file"] == "b.pdf"
@@ -171,8 +171,8 @@ class TestToYaml:
                 )
             ],
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         doc = parsed["documents"][0]
         assert doc["file"] == "invoice.pdf"
         assert doc["doc_type"] == "invoice-incoming"
@@ -190,9 +190,9 @@ class TestToYaml:
             folder_type="t",
             documents=[_make_record(facts={"amount": 50.0, "currency": "EUR"})],
         )
-        output = desc.to_yaml()
-        assert "facts:" in output
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        assert '"facts"' in output
+        parsed = json.loads(output)
         assert parsed["documents"][0]["facts"]["amount"] == 50.0
         assert parsed["documents"][0]["facts"]["currency"] == "EUR"
 
@@ -202,17 +202,19 @@ class TestToYaml:
             folder_type="t",
             documents=[_make_record(facts={})],
         )
-        output = desc.to_yaml()
-        assert "facts:" not in output
+        output = desc.to_json()
+        assert '"facts"' not in output
 
-    def test_tags_rendered_as_flow_sequence(self) -> None:
+    def test_tags_rendered_as_json_array(self) -> None:
         desc = FolderDescription(
             folder_path="/p",
             folder_type="t",
             documents=[_make_record(tags=["alpha", "beta", "gamma"])],
         )
-        output = desc.to_yaml()
-        assert "[alpha, beta, gamma]" in output
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["documents"][0]["tags"] == ["alpha", "beta", "gamma"]
+        assert isinstance(parsed["documents"][0]["tags"], list)
 
     def test_parties_null_to_rendered_correctly(self) -> None:
         desc = FolderDescription(
@@ -220,8 +222,8 @@ class TestToYaml:
             folder_type="t",
             documents=[_make_record(to=None)],
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         assert parsed["documents"][0]["parties"]["to"] is None
 
     def test_empty_documents_produces_empty_list(self) -> None:
@@ -230,8 +232,8 @@ class TestToYaml:
             folder_type="t",
             documents=[],
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         assert parsed["documents"] == []
 
     def test_output_ends_with_trailing_newline(self) -> None:
@@ -241,10 +243,10 @@ class TestToYaml:
             documents=[_make_record()],
             updated_at="2026-01-01",
         )
-        output = desc.to_yaml()
+        output = desc.to_json()
         assert output.endswith("\n")
 
-    def test_output_is_valid_yaml(self) -> None:
+    def test_output_is_valid_json(self) -> None:
         desc = FolderDescription(
             folder_path="/drive/root:/Test",
             folder_type="invoices",
@@ -256,11 +258,142 @@ class TestToYaml:
             ],
             updated_at="2026-03-10",
         )
-        output = desc.to_yaml()
-        parsed = yaml.safe_load(output)
+        output = desc.to_json()
+        parsed = json.loads(output)
         assert isinstance(parsed, dict)
         assert "folder" in parsed
         assert "documents" in parsed
+
+    # -- overview tests --
+
+    def test_overview_document_count(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(file="a.pdf"),
+                _make_record(file="b.pdf"),
+                _make_record(file="c.pdf"),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["overview"]["document_count"] == 3
+
+    def test_overview_types_present(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(doc_type="receipt"),
+                _make_record(doc_type="invoice-incoming"),
+                _make_record(doc_type="receipt"),
+                _make_record(doc_type="contract"),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["overview"]["types_present"] == ["contract", "invoice-incoming", "receipt"]
+
+    def test_overview_total_amount_eur_sums_eur_only(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(facts={"amount": 100.0, "currency": "EUR"}),
+                _make_record(facts={"amount": 250.0, "currency": "EUR"}),
+                _make_record(facts={"amount": 999.0, "currency": "USD"}),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["overview"]["total_amount_eur"] == 350.0
+
+    def test_overview_by_expense_category(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(facts={"expense_category": "travel", "amount": 100.0}),
+                _make_record(facts={"expense_category": "travel", "amount": 200.0}),
+                _make_record(facts={"expense_category": "office", "amount": 50.0}),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        by_cat = parsed["overview"]["by_expense_category"]
+        assert by_cat["travel"] == {"count": 2, "total": 300.0}
+        assert by_cat["office"] == {"count": 1, "total": 50.0}
+
+    def test_overview_by_country(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(facts={"country": "DE", "amount": 100.0}),
+                _make_record(facts={"country": "DE", "amount": 50.0}),
+                _make_record(facts={"country": "US", "amount": 200.0}),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        by_country = parsed["overview"]["by_country"]
+        assert by_country["DE"] == {"count": 2, "total": 150.0}
+        assert by_country["US"] == {"count": 1, "total": 200.0}
+
+    def test_overview_date_range(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[
+                _make_record(date="2026-03-15"),
+                _make_record(date="2026-01-01"),
+                _make_record(date="2026-06-30"),
+            ],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["overview"]["date_range"] == "2026-01-01 to 2026-06-30"
+
+    def test_overview_empty_documents(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            documents=[],
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        overview = parsed["overview"]
+        assert overview["document_count"] == 0
+        assert overview["date_range"] == ""
+        assert overview["types_present"] == []
+        assert overview["total_amount_eur"] == 0.0
+        assert overview["by_expense_category"] == {}
+        assert overview["by_country"] == {}
+
+    # -- period tests --
+
+    def test_period_included_when_set(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            period="2026-01",
+            updated_at="2026-03-10",
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert parsed["folder"]["period"] == "2026-01"
+
+    def test_period_omitted_when_none(self) -> None:
+        desc = FolderDescription(
+            folder_path="/p",
+            folder_type="t",
+            period=None,
+            updated_at="2026-03-10",
+        )
+        output = desc.to_json()
+        parsed = json.loads(output)
+        assert "period" not in parsed["folder"]
 
 
 # ---------------------------------------------------------------------------

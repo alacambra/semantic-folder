@@ -42,36 +42,41 @@ You are a document data extractor for a German IT consultancy (Datamantics UG, \
 operated by Albert Lacambra Basil). Extract structured metadata from the \
 provided document.
 
-Return ONLY valid YAML (no markdown fences, no commentary). Follow this \
+Return ONLY valid JSON (no markdown fences, no commentary). Follow this \
 exact structure:
 
-file: "{filename}"
-doc_type: <see list below>
-doc_lang: <2-letter ISO code of the document's language>
-date: "YYYY-MM-DD"
-parties:
-  from: <who sent/issued this>
-  to: <who received this, or null>
-summary: >
-  2-3 sentences. State what the document IS, its key content,
-  and any critical dates or amounts. Be factual, no filler.
-tags: [<lowercase keywords for search -- include: topic, vendor/entity, \
-document purpose, relevant domain>]
-facts:
-  <key>: <value>
-  # Extract ALL notable structured data points from the document.
-  # Use clear, consistent key names in snake_case.
-  # Common keys (use when applicable):
-  #   amount, currency, vat_amount, vat_rate -- for anything with money
-  #   deadline, due_date, valid_until -- for time-sensitive items
-  #   reference_number, policy_number, invoice_number -- for identifiers
-  #   client, project, phase -- for project-related docs
-  #   contract_start, contract_end, notice_period -- for contracts
-  #   country -- 2-letter ISO code where transaction/entity is located
-  #   expense_category -- one of: travel, software, telecom, hosting, \
+{{
+  "file": "{filename}",
+  "doc_type": "<see list below>",
+  "doc_lang": "<2-letter ISO code of the document's language>",
+  "date": "YYYY-MM-DD",
+  "parties": {{
+    "from": "<who sent/issued this>",
+    "to": "<who received this, or null>"
+  }},
+  "summary": "2-3 sentences. State what the document IS, its key content, \
+and any critical dates or amounts. Be factual, no filler.",
+  "tags": ["<lowercase keywords for search -- include: topic, vendor/entity, \
+document purpose, relevant domain>"],
+  "facts": {{
+    "<key>": "<value>"
+  }}
+}}
+
+Facts guidance:
+- Extract ALL notable structured data points from the document.
+- Use clear, consistent key names in snake_case.
+- Common keys (use when applicable):
+  amount, currency, vat_amount, vat_rate -- for anything with money
+  deadline, due_date, valid_until -- for time-sensitive items
+  reference_number, policy_number, invoice_number -- for identifiers
+  client, project, phase -- for project-related docs
+  contract_start, contract_end, notice_period -- for contracts
+  country -- 2-letter ISO code where transaction/entity is located
+  expense_category -- one of: travel, software, telecom, hosting, \
 office, professional, insurance, fees, meals
-  # Add any other keys that capture important document-specific data.
-  # Do NOT include keys with null values -- omit them entirely.
+- Add any other keys that capture important document-specific data.
+- Do NOT include keys with null values -- omit them entirely.
 
 Allowed doc_type values:
 {allowed_doc_types}
@@ -189,11 +194,11 @@ class AnthropicDescriber:
             return f"[could not summarize: {filename}]"
 
     def extract_metadata(self, filename: str, content: bytes) -> str:
-        """Extract structured YAML metadata from a file.
+        """Extract structured JSON metadata from a file.
 
         Dispatches to the appropriate content strategy based on file extension
         (text, docx, pdf, image) and sends the extraction prompt instead of
-        the one-sentence summary prompt. Returns the raw YAML string from the
+        the one-sentence summary prompt. Returns the raw JSON string from the
         LLM response.
 
         Args:
@@ -201,7 +206,7 @@ class AnthropicDescriber:
             content: Raw file content.
 
         Returns:
-            Raw YAML string from the LLM extraction response.
+            Raw JSON string from the LLM extraction response.
 
         Raises:
             Exception: Propagates API errors to the caller for handling.

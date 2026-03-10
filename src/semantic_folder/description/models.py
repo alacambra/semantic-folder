@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 _RESOURCES_DIR = Path(__file__).parent / "resources"
 
 
 def _load_doc_types() -> frozenset[str]:
-    """Load allowed doc_type values from the YAML resource file.
+    """Load allowed doc_type values from the JSON resource file.
 
     Returns:
         Frozenset of allowed doc_type strings.
     """
-    path = _RESOURCES_DIR / "doc_types.yaml"
+    path = _RESOURCES_DIR / "doc_types.json"
     with path.open() as f:
-        data = yaml.safe_load(f)
+        data = json.load(f)
     return frozenset(data["doc_types"])
 
 
@@ -64,23 +63,15 @@ class DocumentRecord:
     parties: Parties
     summary: str
     tags: list[str] = field(default_factory=list)
-    facts: dict[str, object] = field(default_factory=dict)
+    facts: dict[str, Any] = field(default_factory=dict)
 
 
-class _FlowSequenceDumper(yaml.Dumper):
-    """Custom YAML dumper that renders tagged lists as flow sequences."""
+@dataclass
+class CategoryBreakdown:
+    """Aggregated count and total for a category."""
 
-
-def _flow_sequence_representer(dumper: yaml.Dumper, data: _FlowSequenceList) -> Any:
-    """Represent a _FlowSequenceList as a flow-style YAML sequence."""
-    return dumper.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=True)
-
-
-class _FlowSequenceList(list):  # type: ignore[type-arg]
-    """List subclass that signals flow-style rendering in YAML."""
-
-
-_FlowSequenceDumper.add_representer(_FlowSequenceList, _flow_sequence_representer)
+    count: int
+    total: float
 
 
 @dataclass
@@ -92,37 +83,90 @@ class FolderDescription:
         folder_type: Classification of the folder (AI-inferred).
         documents: Ordered list of structured document records.
         updated_at: ISO date string (YYYY-MM-DD) when the description was generated.
+        period: Optional period string (e.g. "2026-01"), inferred from document dates.
     """
 
     folder_path: str
     folder_type: str
     documents: list[DocumentRecord] = field(default_factory=list)
     updated_at: str = ""
+    period: str | None = None
 
-    def to_yaml(self) -> str:
-        """Serialize this folder description to YAML.
+    def to_json(self) -> str:
+        """Serialize this folder description to JSON.
 
         Returns:
-            String content suitable for writing to folder_description.yaml.
+            String content suitable for writing to folder_description.json.
         """
         data: dict[str, object] = {
-            "folder": {
-                "path": self.folder_path,
-                "type": self.folder_type,
-                "updated_at": self.updated_at,
-            },
+            "folder": self._build_folder_block(),
+            "overview": self._build_overview(),
             "documents": self._build_documents_list(),
         }
-        return yaml.dump(
-            data,
-            Dumper=_FlowSequenceDumper,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-        )
+        return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+
+    def _build_folder_block(self) -> dict[str, object]:
+        """Build the folder metadata block."""
+        block: dict[str, object] = {
+            "path": self.folder_path,
+            "type": self.folder_type,
+        }
+        if self.period is not None:
+            block["period"] = self.period
+        block["updated_at"] = self.updated_at
+        return block
+
+    def _build_overview(self) -> dict[str, object]:
+        """Compute overview statistics from the documents list."""
+        dates: list[str] = [d.date for d in self.documents if d.date]
+        types_present = sorted({d.doc_type for d in self.documents})
+
+        total_amount_eur = 0.0
+        by_expense: dict[str, CategoryBreakdown] = {}
+        by_country: dict[str, CategoryBreakdown] = {}
+
+        for doc in self.documents:
+            amount = doc.facts.get("amount")
+            currency = doc.facts.get("currency")
+
+            if isinstance(amount, (int, float)) and currency == "EUR":
+                total_amount_eur += amount
+
+            category = doc.facts.get("expense_category")
+            if isinstance(category, str) and category:
+                entry = by_expense.setdefault(category, CategoryBreakdown(count=0, total=0.0))
+                entry.count += 1
+                if isinstance(amount, (int, float)):
+                    entry.total += amount
+
+            country = doc.facts.get("country")
+            if isinstance(country, str) and country:
+                entry = by_country.setdefault(country, CategoryBreakdown(count=0, total=0.0))
+                entry.count += 1
+                if isinstance(amount, (int, float)):
+                    entry.total += amount
+
+        date_range = ""
+        if dates:
+            sorted_dates = sorted(dates)
+            date_range = f"{sorted_dates[0]} to {sorted_dates[-1]}"
+
+        return {
+            "document_count": len(self.documents),
+            "date_range": date_range,
+            "types_present": types_present,
+            "total_amount_eur": round(total_amount_eur, 2),
+            "has_action_items": False,
+            "by_expense_category": {
+                k: {"count": v.count, "total": round(v.total, 2)} for k, v in by_expense.items()
+            },
+            "by_country": {
+                k: {"count": v.count, "total": round(v.total, 2)} for k, v in by_country.items()
+            },
+        }
 
     def _build_documents_list(self) -> list[dict[str, object]]:
-        """Build a list of plain dicts from document records for YAML serialization."""
+        """Build a list of plain dicts from document records for JSON serialization."""
         result: list[dict[str, object]] = []
         for doc in self.documents:
             record: dict[str, object] = {
@@ -135,7 +179,7 @@ class FolderDescription:
                     "to": doc.parties.to,
                 },
                 "summary": doc.summary,
-                "tags": _FlowSequenceList(doc.tags),
+                "tags": list(doc.tags),
             }
             if doc.facts:
                 record["facts"] = doc.facts

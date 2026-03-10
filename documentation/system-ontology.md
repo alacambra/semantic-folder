@@ -13,12 +13,12 @@
 
 | Concept                     | Definition                                                                                                                                                                  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Folder Description**      | An AI-generated Markdown file summarizing the contents of a OneDrive folder, written back to that folder as `folder_description.md`.                                        |
+| **Folder Description**      | An AI-generated YAML file containing structured metadata for every file in a OneDrive folder, written back to that folder as `folder_description.yaml`.                     |
 | **Delta Detection**         | The mechanism by which the system discovers which OneDrive folders have changed since the last run, using the Microsoft Graph Delta API.                                    |
-| **File Summarization**      | The process of generating a one-sentence AI summary for each file in a changed folder, dispatched by file type (text, docx, pdf, image).                                    |
-| **Folder Classification**   | The process of assigning a short category label (e.g. "project-docs", "invoices") to a folder based on its path and file names.                                             |
-| **Summary Caching**         | Content-addressed caching of per-file summaries in Azure Blob Storage, keyed by SHA-256 hash, to avoid redundant LLM calls for unchanged files.                             |
-| **Loop Prevention**         | A safety mechanism that excludes folders from processing when the only detected change is the `folder_description.md` file itself, preventing infinite regeneration cycles. |
+| **Metadata Extraction**     | The process of extracting structured YAML metadata (doc_type, language, date, parties, summary, tags, facts) from each file via AI, dispatched by file type (text, docx, pdf, image). |
+| **Folder Classification**   | The process of assigning a short category label (e.g. "client-engagement", "insurance-policies") to a folder based on its path and file names.                              |
+| **Metadata Caching**        | Content-addressed caching of per-file extracted metadata in Azure Blob Storage, keyed by SHA-256 hash, to avoid redundant LLM calls for unchanged files.                    |
+| **Loop Prevention**         | A safety mechanism that excludes folders from processing when the only detected change is the `folder_description.yaml` file itself, preventing infinite regeneration cycles. |
 | **Delta Token Persistence** | Storage of the Microsoft Graph delta token in Azure Blob Storage so the system can resume incremental change tracking across runs.                                          |
 
 ## 2. Business Workflows
@@ -54,13 +54,13 @@ The system runs on a daily timer (02:00 UTC) or on-demand via HTTP trigger.
          |
          v
 +-------------------+
-| 6. Describe       |  For each file: check cache → summarize via LLM → cache result
+| 6. Describe       |  For each file: check cache → extract YAML metadata via LLM → cache
 |                   |  Classify folder type via LLM
 +--------+----------+
          |
          v
 +-------------------+
-| 7. Upload         |  Serialize FolderDescription to Markdown, PUT to OneDrive
+| 7. Upload         |  Serialize FolderDescription to YAML, PUT to OneDrive
 +--------+----------+
          |
          v
@@ -105,9 +105,9 @@ FolderProcessor ── orchestrates ──── Delta-to-Description Pipeline
 
 DeltaProcessor ─── produces ────── list[DriveItem]
 FolderProcessor ── produces ────── FolderListing
-AnthropicDescriber ── produces ── file summaries (str), folder type (str)
-generate_description ── produces ── FolderDescription
-FolderDescription ── serializes_to ── Markdown (folder_description.md)
+AnthropicDescriber ── produces ── YAML metadata (str), folder type (str)
+generate_description ── produces ── FolderDescription (with DocumentRecords)
+FolderDescription ── serializes_to ── YAML (folder_description.yaml)
 
 SummaryCache ──── validates ────── content identity via SHA-256 hash
 DeltaProcessor ── governs ──────── loop prevention (filters self-changes)
@@ -161,29 +161,51 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 **Location**: `src/semantic_folder/graph/models.py:33`
 **Role**: Represents an enumerated folder's contents. Produced by `FolderProcessor.list_folder()`, consumed by content reading and description generation.
 
-### 6.3 FileDescription
+### 6.3 Parties
 
-| Attribute  | Type  | Description                       |
-| ---------- | ----- | --------------------------------- |
-| `filename` | `str` | Name of the file                  |
-| `summary`  | `str` | AI-generated one-sentence summary |
+| Attribute | Type           | Description                                      |
+| --------- | -------------- | ------------------------------------------------ |
+| `from_`   | `str`          | Who sent or issued the document                  |
+| `to`      | `str \| None`  | Who received the document, or None if N/A        |
 
-**Location**: `src/semantic_folder/description/models.py:9`
-**Role**: Value object representing a single file's summary within a folder description.
+**Location**: `src/semantic_folder/description/models.py:30`
+**Role**: Value object for sender/recipient within a DocumentRecord. `from_` maps to `from` in YAML serialization.
 
-### 6.4 FolderDescription
+### 6.4 DocumentRecord
 
-| Attribute     | Type                    | Description                       |
-| ------------- | ----------------------- | --------------------------------- |
-| `folder_path` | `str`                   | OneDrive path of the folder       |
-| `folder_type` | `str`                   | AI-inferred category label        |
-| `files`       | `list[FileDescription]` | Ordered list of file descriptions |
-| `updated_at`  | `str`                   | ISO date string (YYYY-MM-DD)      |
+| Attribute  | Type                | Description                                                    |
+| ---------- | ------------------- | -------------------------------------------------------------- |
+| `file`     | `str`               | Filename as it appears in OneDrive                             |
+| `doc_type` | `str`               | Controlled vocabulary value from DOC_TYPES (24 allowed values) |
+| `doc_lang` | `str`               | Two-letter ISO 639-1 language code                             |
+| `date`     | `str`               | Primary date in YYYY-MM-DD format                              |
+| `parties`  | `Parties`           | Sender and recipient                                           |
+| `summary`  | `str`               | 2-3 sentence factual summary in English                        |
+| `tags`     | `list[str]`         | Lowercase keyword list for search (4-8 terms)                  |
+| `facts`    | `dict[str, object]` | Free-form key-value pairs with domain-specific structured data |
 
-**Location**: `src/semantic_folder/description/models.py:23`
-**Role**: The complete output model. Serialized to Markdown via `to_markdown()` and uploaded to OneDrive as `folder_description.md`.
+**Location**: `src/semantic_folder/description/models.py:42`
+**Role**: Structured metadata for a single file extracted by the LLM. Universal envelope (file through tags) plus free-form facts block.
 
-### 6.5 AppConfig
+### 6.5 FolderDescription
+
+| Attribute     | Type                    | Description                          |
+| ------------- | ----------------------- | ------------------------------------ |
+| `folder_path` | `str`                   | OneDrive path of the folder          |
+| `folder_type` | `str`                   | AI-inferred category label           |
+| `documents`   | `list[DocumentRecord]`  | Ordered list of document records     |
+| `updated_at`  | `str`                   | ISO date string (YYYY-MM-DD)         |
+
+**Location**: `src/semantic_folder/description/models.py:86`
+**Role**: The complete output model. Serialized to YAML via `to_yaml()` and uploaded to OneDrive as `folder_description.yaml`.
+
+### 6.6 DOC_TYPES
+
+**Location**: `src/semantic_folder/description/models.py:26` (loaded from `resources/doc_types.yaml`)
+**Type**: `frozenset[str]` — 24 allowed values
+**Role**: Controlled vocabulary for `DocumentRecord.doc_type`. Used both for LLM prompt injection (allowed values list) and for validation in `parse_document_record()`. Single source of truth — update `resources/doc_types.yaml` to add/remove types without code changes.
+
+### 6.7 AppConfig
 
 | Attribute                     | Type    | Description                          |
 | ----------------------------- | ------- | ------------------------------------ |
@@ -234,39 +256,42 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 
 ### 7.3 AnthropicDescriber
 
-**Location**: `src/semantic_folder/description/describer.py:82`
-**Purpose**: AI description generation via Anthropic Messages API.
+**Location**: `src/semantic_folder/description/describer.py:135`
+**Purpose**: AI metadata extraction and folder classification via Anthropic Messages API.
 
-| Method                                    | Description                                  |
-| ----------------------------------------- | -------------------------------------------- |
-| `summarize_file(filename, content)`       | Dispatch by file type → one-sentence summary |
-| `classify_folder(folder_path, filenames)` | Folder path + file list → category label     |
+| Method                                    | Description                                              |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `extract_metadata(filename, content)`     | Dispatch by file type → structured YAML metadata string  |
+| `classify_folder(folder_path, filenames)` | Folder path + file list → category label                 |
+| `summarize_file(filename, content)`       | Legacy: dispatch by file type → one-sentence summary     |
 
-**File type dispatch**:
+**Primary method — `extract_metadata` file type dispatch**:
 
 ```
-summarize_file(filename, content)
+extract_metadata(filename, content)
     │
-    ├── .docx  → _summarize_docx()   (extract via python-docx, then text prompt)
-    ├── .pdf   → _summarize_pdf()    (base64 document content block)
-    ├── images → _summarize_image()  (base64 image content block)
-    └── other  → _summarize_text()   (UTF-8 decode, text prompt)
+    ├── .docx  → _extract_docx()       (extract via python-docx, then extraction prompt)
+    ├── .pdf   → _extract_pdf()        (base64 document content block)
+    ├── images → _extract_image()      (base64 image content block)
+    └── other  → _extract_text_file()  (UTF-8 decode, extraction prompt)
 ```
 
-**Resilience**: SDK-level retries (`max_retries`), inter-request delay (`time.sleep`), per-method exception catch with fallback strings.
+**Extraction prompt**: `_EXTRACTION_PROMPT_TEMPLATE` defines the YAML schema, business context, and rules. `{allowed_doc_types}` placeholder is injected dynamically from `DOC_TYPES`. Max tokens: 1024.
+
+**Resilience**: SDK-level retries (`max_retries`), inter-request delay (`time.sleep`). Errors propagate to caller (handled by `generate_description()` fallback).
 
 ### 7.4 SummaryCache
 
 **Location**: `src/semantic_folder/description/cache.py:23`
-**Purpose**: Content-addressed cache for file summaries in Azure Blob Storage.
+**Purpose**: Content-addressed cache for extracted metadata in Azure Blob Storage.
 
-| Method                       | Description                       |
-| ---------------------------- | --------------------------------- |
-| `content_hash(content)`      | SHA-256 hex digest (static)       |
-| `get(content_hash)`          | Retrieve cached summary or `None` |
-| `put(content_hash, summary)` | Store summary in blob             |
+| Method                       | Description                         |
+| ---------------------------- | ----------------------------------- |
+| `content_hash(content)`      | SHA-256 hex digest (static)         |
+| `get(content_hash)`          | Retrieve cached metadata or `None`  |
+| `put(content_hash, metadata)`| Store metadata YAML string in blob  |
 
-**Key scheme**: `{blob_prefix}{sha256_hex}` (e.g. `summary-cache/a1b2c3...`)
+**Key scheme**: `{blob_prefix}{sha256_hex}` (e.g. `metadata-cache/a1b2c3...`)
 
 ### 7.5 FolderProcessor
 
@@ -279,16 +304,17 @@ summarize_file(filename, content)
 | `resolve_folders(items)`      | Deduplicate parent folder IDs from changed files                                    |
 | `list_folder(folder_id)`      | Enumerate folder children → `FolderListing`                                         |
 | `read_file_contents(listing)` | Download file bytes via Graph API                                                   |
-| `upload_description(listing)` | Generate description + upload Markdown                                              |
+| `upload_description(listing)` | Generate description + upload YAML                                                  |
 
 ## 8. Value Objects
 
-| Value Object        | Location                   | Description                                     |
-| ------------------- | -------------------------- | ----------------------------------------------- |
-| `FileDescription`   | `description/models.py:9`  | Immutable filename + summary pair               |
-| `DriveItem`         | `graph/models.py:21`       | Immutable snapshot of a Graph drive item        |
-| `FolderListing`     | `graph/models.py:33`       | Immutable snapshot of a folder's file list      |
-| `FolderDescription` | `description/models.py:23` | Immutable folder description with serialization |
+| Value Object        | Location                    | Description                                          |
+| ------------------- | --------------------------- | ---------------------------------------------------- |
+| `Parties`           | `description/models.py:30`  | Immutable sender/recipient pair                      |
+| `DocumentRecord`    | `description/models.py:42`  | Immutable structured metadata for a single file      |
+| `DriveItem`         | `graph/models.py:21`        | Immutable snapshot of a Graph drive item             |
+| `FolderListing`     | `graph/models.py:33`        | Immutable snapshot of a folder's file list           |
+| `FolderDescription` | `description/models.py:86`  | Immutable folder description with YAML serialization |
 
 Note: All are dataclasses without identity semantics — equality is by value. None are persisted directly; they are transient pipeline data.
 
@@ -339,7 +365,9 @@ Note: All are dataclasses without identity semantics — equality is by value. N
 | `GraphAuthError` | `graph/client.py:23`          | MSAL token acquisition fails                                 |
 | `GraphApiError`  | `graph/client.py:27`          | Graph API returns non-2xx (carries `status_code`, `message`) |
 | `ValueError`     | `graph/delta.py:153`          | Delta response missing `@odata.deltaLink`                    |
-| `ValueError`     | `description/describer.py:54` | No `TextBlock` in Anthropic response                         |
+| `ValueError`     | `description/describer.py:107` | No `TextBlock` in Anthropic response                        |
+| `ValueError`     | `description/generator.py:99`  | YAML parse failure in `parse_document_record()`             |
+| `ValueError`     | `description/generator.py:102` | Extracted data is not a YAML mapping                        |
 | `KeyError`       | `config.py` (implicit)        | Required env var missing at startup                          |
 
 ## 11. Dependency Injection Pattern

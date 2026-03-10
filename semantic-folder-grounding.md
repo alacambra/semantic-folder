@@ -3,7 +3,7 @@
 **AI-Powered Knowledge Context for Microsoft Copilot**
 Datamantics UG — Internal Administration Use Case
 
-_Version 1.0 | February 2026 | Albert Lacambra Basil | CONFIDENTIAL_
+_Version 2.0 | March 2026 | Albert Lacambra Basil | CONFIDENTIAL_
 
 ---
 
@@ -13,7 +13,7 @@ Datamantics UG is a lean German IT consultancy operated by Albert Lacambra Basil
 
 This document describes **Semantic Folder Grounding**: an automated background service that continuously generates and maintains AI-readable context files across the Datamantics OneDrive. These files serve two purposes simultaneously — enabling Microsoft Copilot chat to answer natural language questions accurately, and providing structured knowledge to Copilot Studio agents that perform specific administrative tasks autonomously.
 
-The AI phase reads folder paths and file listings and infers all relevant context without any hardcoded schemas, manual tagging, or predefined structure. The business context — Datamantics UG, German IT consultancy — is provided once and applies globally.
+The AI phase reads each file's actual content and extracts structured metadata (document type, dates, parties, amounts, tags) into a YAML file per folder — no manual tagging, no predefined structure. The business context — Datamantics UG, German IT consultancy — is provided once and applies globally.
 
 **Key Outcomes**
 
@@ -21,7 +21,7 @@ The AI phase reads folder paths and file listings and infers all relevant contex
 - VA can orient in any client situation and act independently without asking Albert
 - Copilot Studio agents read the same context files to perform billing, proposals, status reports
 - Descriptions update automatically as files are added, modified, or deleted
-- AI provider is swappable — Anthropic Claude, Azure OpenAI, or local models via one config line
+- AI provider is Anthropic Claude (Haiku 4.5), configurable via environment variable
 - No Power Automate, no manual tagging, no hardcoded schemas
 
 ---
@@ -62,9 +62,9 @@ The same problem applies to Copilot Studio agents: an agent tasked with generati
 
 ### 3.1 Core Concept
 
-The solution generates and maintains a `folder_description.md` file in every Datamantics OneDrive folder. This file is written by an AI that reads the folder path and file listing and infers the relevant administrative context from that information alone — no predefined schema, no manual input.
+The solution generates and maintains a `folder_description.yaml` file in every Datamantics OneDrive folder. This file is written by an AI that reads each file's actual content (text, PDF, images, docx) and extracts structured metadata — document type, language, dates, parties, a factual summary, searchable tags, and domain-specific facts (amounts, reference numbers, deadlines, etc.).
 
-A customer folder produces a description oriented around engagement status, contracts, and invoicing. An insurance folder surfaces coverage, expiry, and policy type. A costs folder surfaces fixed versus variable expenses. The AI determines what matters for each folder based on what it finds there.
+Each document gets a structured YAML record with a universal envelope (file, doc_type, doc_lang, date, parties, summary, tags) plus a free-form `facts` block for domain-specific data. The AI determines what facts matter for each document based on its content — an invoice gets amounts and due dates, a contract gets terms and notice periods, an insurance policy gets coverage and expiry.
 
 ### 3.2 The Three-Layer Knowledge Model
 
@@ -78,52 +78,87 @@ The critical design point: **layers 2 and 3 consume the same files**. Building t
 
 ### 3.3 Example: Customer Folder Description
 
-```markdown
-# Customer: Nexplore GmbH
-
-**Inferred type:** Active customer — IT consultancy engagement
-
-**Key documents:**
-
-- SOW_2026_01.pdf — current active contract (AUTHORITATIVE)
-- invoice_2026_01.pdf — most recent invoice
-- proposal_2025_11.pdf — superseded, kept for reference
-
-**Context for VA:**
-This is an active client. The current engagement scope and rate are
-defined in SOW_2026_01.pdf. Earlier proposal documents are
-for reference only and should not be cited as current agreements.
-
-**Context for agents:**
-Billing tasks: use SOW_2026_01.pdf as the authoritative reference.
-Client communications: verify engagement status from this file first.
-Do not reference superseded proposal documents.
-
-**Last updated:** 2026-02-21 (automated)
+```yaml
+folder:
+  path: /drive/root:/Kunden/Nexplore
+  type: client-engagement
+  updated_at: '2026-03-10'
+documents:
+- file: SOW_2026_01.pdf
+  doc_type: contract
+  doc_lang: de
+  date: '2026-01-15'
+  parties:
+    from: Datamantics UG
+    to: Nexplore GmbH
+  summary: >
+    Statement of Work for IT consultancy engagement starting January 2026.
+    Defines scope, deliverables, and billing rate for the current phase.
+  tags: [sow, contract, nexplore, consultancy, engagement]
+  facts:
+    contract_start: '2026-01-15'
+    contract_end: '2026-06-30'
+    notice_period: 30 days
+    amount: 850.00
+    currency: EUR
+- file: invoice_2026_01.pdf
+  doc_type: invoice-outgoing
+  doc_lang: de
+  date: '2026-01-31'
+  parties:
+    from: Datamantics UG
+    to: Nexplore GmbH
+  summary: >
+    Monthly invoice for January 2026 consultancy services.
+    Covers 18 days at the agreed daily rate.
+  tags: [invoice, nexplore, billing, january-2026]
+  facts:
+    invoice_number: RE-2026-001
+    amount: 15300.00
+    currency: EUR
+    vat_rate: 19
+    vat_amount: 2907.00
 ```
 
 ### 3.4 Example: Insurance Folder Description
 
-```markdown
-# Insurance: Professional Indemnity
-
-**Inferred type:** Active insurance policy folder
-
-**Key documents:**
-
-- PI_policy_2026.pdf — current policy (ACTIVE)
-- PI_policy_2025.pdf — expired, prior year
-- certificate_2026.pdf — coverage certificate
-
-**Context for VA:**
-Current professional indemnity coverage is defined in PI_policy_2026.pdf.
-The 2025 policy is expired. Certificate of coverage is available separately.
-
-**Context for agents:**
-When checking insurance coverage, read PI_policy_2026.pdf only.
-Flag PI_policy_2025.pdf as expired — do not cite for current coverage.
-
-**Last updated:** 2026-02-21 (automated)
+```yaml
+folder:
+  path: /drive/root:/Versicherungen/Berufshaftpflicht
+  type: insurance-policies
+  updated_at: '2026-03-10'
+documents:
+- file: PI_policy_2026.pdf
+  doc_type: insurance-policy
+  doc_lang: de
+  date: '2026-01-01'
+  parties:
+    from: Allianz Versicherung
+    to: Datamantics UG
+  summary: >
+    Professional indemnity insurance policy for 2026. Covers claims arising
+    from IT consultancy services with a limit of EUR 1,000,000 per incident.
+  tags: [insurance, professional-indemnity, allianz, policy, 2026]
+  facts:
+    policy_number: BH-2026-4471
+    valid_until: '2026-12-31'
+    amount: 1000000.00
+    currency: EUR
+    premium: 890.00
+- file: PI_policy_2025.pdf
+  doc_type: insurance-policy
+  doc_lang: de
+  date: '2025-01-01'
+  parties:
+    from: Allianz Versicherung
+    to: Datamantics UG
+  summary: >
+    Expired professional indemnity insurance policy for 2025.
+    Superseded by PI_policy_2026.pdf.
+  tags: [insurance, professional-indemnity, allianz, policy, 2025, expired]
+  facts:
+    policy_number: BH-2025-4471
+    valid_until: '2025-12-31'
 ```
 
 ### 3.5 File Lifecycle Handling
@@ -158,35 +193,18 @@ A lightweight Python service (Azure Function, Azure Container App, or standalone
 - Receives the webhook notification or runs on schedule
 - Calls the Graph delta API with the stored token to get changed items
 - Resolves which folder each changed item belongs to
-- Filters out `folder_description.md` changes to prevent infinite loops
+- Filters out `folder_description.yaml` changes to prevent infinite loops
 - Calls the AI layer with the folder path and file listing
 - Writes the generated description back to OneDrive via Graph API
 - Stores the new delta token for the next run
 
 ### 4.3 AI Layer — Generating Descriptions
 
-The AI receives the folder path, file names, and file types, plus a fixed system prompt identifying the business context as Datamantics UG, a German IT consultancy. It infers all relevant structure from that information alone — folder type, key documents, authoritative files, context for the VA, context for agents.
+The AI receives each file's actual content — text, PDF documents, images, Word files — plus a structured extraction prompt that defines the output schema and business context (Datamantics UG, German IT consultancy). It extracts structured YAML metadata per file: document type (from a controlled vocabulary of 24 types), language, date, parties, factual summary, searchable tags, and domain-specific facts.
 
-The AI provider is fully abstracted, switchable via configuration:
+The folder is also classified by the AI into a short category label (e.g. "client-engagement", "insurance-policies") based on its path and file names.
 
-```yaml
-# config.yaml — change one line to switch AI provider
-ai_provider: anthropic
-
-providers:
-  anthropic:
-    model: claude-3-5-haiku-20241022
-    api_key_env: ANTHROPIC_API_KEY
-
-  azure_openai:
-    endpoint: https://yourinstance.openai.azure.com
-    deployment: gpt-4o-mini
-    api_key_env: AZURE_OPENAI_KEY
-
-  ollama:
-    endpoint: http://localhost:11434
-    model: llama3.2
-```
+The AI provider is Anthropic Claude (currently Claude Haiku 4.5), configurable via environment variable `SF_ANTHROPIC_MODEL`.
 
 ### 4.4 Full Architecture Flow
 
@@ -205,13 +223,14 @@ providers:
           v
 4.  For each affected folder:
      a.  List all files in folder via Graph API
-     b.  Skip if only folder_description.md changed (loop prevention)
-     c.  Call AI provider: folder path + file listing + business context
-     d.  Receive generated Markdown description
-     e.  Write / update folder_description.md via Graph API
+     b.  Skip if only folder_description.yaml changed (loop prevention)
+     c.  Download each file's content via Graph API
+     d.  For each file: extract structured YAML metadata via AI (with caching)
+     e.  Classify folder type via AI
+     f.  Serialize to YAML, upload folder_description.yaml via Graph API
           |
           v
-5.  Copilot indexes updated folder_description.md automatically
+5.  Copilot indexes updated folder_description.yaml automatically
           |
      ┌────┴────┐
      v         v
@@ -249,7 +268,7 @@ The VA can orient themselves in any client or administrative situation without a
 
 ### 5.3 Copilot Studio Agents
 
-Agents are configured to read the relevant `folder_description.md` as their primary context source before performing any task:
+Agents are configured to read the relevant `folder_description.yaml` as their primary context source before performing any task. The structured YAML format with typed fields (amounts, dates, reference numbers) makes agent parsing reliable:
 
 | Agent task                  | Context consumed from folder description                      |
 | --------------------------- | ------------------------------------------------------------- |
@@ -294,12 +313,12 @@ Agents are configured to read the relevant `folder_description.md` as their prim
 
 - **Zero friction for Albert and the VA** — the solution is entirely invisible to both users
 - **No Power Automate** — excluded for being too fragile for developers and too opaque for users
-- **AI infers structure** — no hardcoded schemas; the AI determines what matters per folder from what it finds
-- **Single source of truth** — the same description files serve Copilot chat and Copilot Studio agents
-- **Swappable AI provider** — one config line switches between Anthropic Claude, Azure OpenAI, or local models
+- **AI extracts structured metadata** — two-layer schema (universal envelope + free-form facts) per document, with a controlled vocabulary of 24 document types
+- **Single source of truth** — the same YAML description files serve Copilot chat and Copilot Studio agents
+- **Content-aware extraction** — AI reads actual file content (text, PDF, images, docx) not just filenames
 - **Simplicity over optimisation** — full regeneration on every change; no partial update complexity
 - **Resilience by design** — delta token ensures no missed changes across restarts or downtime
-- **GDPR-aware** — no file content is stored; only file names and metadata are processed; all data stays within the Microsoft 365 tenant
+- **GDPR-aware** — file content is sent to the AI for extraction but not persisted outside the cache; extracted metadata stays in OneDrive within the Microsoft 365 tenant
 
 ---
 
@@ -308,14 +327,14 @@ Agents are configured to read the relevant `folder_description.md` as their prim
 | Step                           | Detail                                                                                                                                                                                      |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1 — Azure App Registration     | Register app in Azure portal. Grant `Files.ReadWrite.All` and `Sites.Read.All` permissions. Admin consent required.                                                                         |
-| 2 — Run PoC script             | Python script authenticates via MSAL, calls Graph delta API, lists all folders, generates descriptions via Anthropic Claude or Azure OpenAI, writes `folder_description.md` to each folder. |
+| 2 — Run PoC script             | Python script authenticates via MSAL, calls Graph delta API, lists all folders, generates descriptions via Anthropic Claude or Azure OpenAI, writes `folder_description.yaml` to each folder. |
 | 3 — Test Copilot chat          | Ask Copilot: client status queries, insurance questions, cost summaries. Compare answers before and after descriptions are in place.                                                        |
 | 4 — VA onboarding test         | VA opens several client folders. Validates that descriptions provide sufficient context to act without asking Albert.                                                                       |
-| 5 — First agent                | Configure a Copilot Studio agent to read `folder_description.md` before performing a billing or status task. Validate output quality.                                                       |
+| 5 — First agent                | Configure a Copilot Studio agent to read `folder_description.yaml` before performing a billing or status task. Validate output quality.                                                       |
 | 6 — Webhook deployment         | Deploy Azure Function with Graph webhook subscription for real-time updates. Delta token stored in Azure Storage.                                                                           |
 | 7 — Client offering evaluation | Assess packaging as a Datamantics managed service for SME clients based on PoC results.                                                                                                     |
 
 ---
 
 _Datamantics UG — AI-Driven Knowledge Management for Lean IT Operations_
-_Version 1.0 | February 2026 | CONFIDENTIAL_
+_Version 2.0 | March 2026 | CONFIDENTIAL_

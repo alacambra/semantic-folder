@@ -37,6 +37,20 @@
    "command": "source .env.local && curl -X POST \"$SF_TRIGGER_URL\"",
    "detail": "Trigger the HTTP endpoint for on-demand delta processing",
    "problemMatcher": []
+  },
+  {
+   "label": "cleanup-dry-run",
+   "type": "shell",
+   "command": "source .env.local && curl -X POST \"$SF_CLEANUP_URL&dry_run=true\"",
+   "detail": "List legacy folder_description.yaml/.md files without deleting",
+   "problemMatcher": []
+  },
+  {
+   "label": "cleanup",
+   "type": "shell",
+   "command": "source .env.local && curl -X POST \"$SF_CLEANUP_URL\"",
+   "detail": "Delete all legacy folder_description.yaml/.md files from OneDrive",
+   "problemMatcher": []
   }
  ]
 }

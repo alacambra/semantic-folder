@@ -3,7 +3,7 @@
 > **Purpose**: Single source of truth for domain concepts and entities.
 > **Audience**: Developers, AI assistants, architects.
 > **Last Updated**: 2026-03-10
-> **Version**: 1.0
+> **Version**: 2.0
 
 ---
 
@@ -13,12 +13,12 @@
 
 | Concept                     | Definition                                                                                                                                                                  |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Folder Description**      | An AI-generated YAML file containing structured metadata for every file in a OneDrive folder, written back to that folder as `folder_description.yaml`.                     |
+| **Folder Description**      | An AI-generated JSON file containing structured metadata for every file in a OneDrive folder, written back to that folder as `folder_description.json`.                     |
 | **Delta Detection**         | The mechanism by which the system discovers which OneDrive folders have changed since the last run, using the Microsoft Graph Delta API.                                    |
-| **Metadata Extraction**     | The process of extracting structured YAML metadata (doc_type, language, date, parties, summary, tags, facts) from each file via AI, dispatched by file type (text, docx, pdf, image). |
+| **Metadata Extraction**     | The process of extracting structured JSON metadata (doc_type, language, date, parties, summary, tags, facts) from each file via AI, dispatched by file type (text, docx, pdf, image). |
 | **Folder Classification**   | The process of assigning a short category label (e.g. "client-engagement", "insurance-policies") to a folder based on its path and file names.                              |
 | **Metadata Caching**        | Content-addressed caching of per-file extracted metadata in Azure Blob Storage, keyed by SHA-256 hash, to avoid redundant LLM calls for unchanged files.                    |
-| **Loop Prevention**         | A safety mechanism that excludes folders from processing when the only detected change is the `folder_description.yaml` file itself, preventing infinite regeneration cycles. |
+| **Loop Prevention**         | A safety mechanism that excludes folders from processing when the only detected change is the `folder_description.json` file itself, preventing infinite regeneration cycles. |
 | **Delta Token Persistence** | Storage of the Microsoft Graph delta token in Azure Blob Storage so the system can resume incremental change tracking across runs.                                          |
 
 ## 2. Business Workflows
@@ -54,13 +54,13 @@ The system runs on a daily timer (02:00 UTC) or on-demand via HTTP trigger.
          |
          v
 +-------------------+
-| 6. Describe       |  For each file: check cache → extract YAML metadata via LLM → cache
+| 6. Describe       |  For each file: check cache → extract JSON metadata via LLM → cache
 |                   |  Classify folder type via LLM
 +--------+----------+
          |
          v
 +-------------------+
-| 7. Upload         |  Serialize FolderDescription to YAML, PUT to OneDrive
+| 7. Upload         |  Serialize FolderDescription to JSON, PUT to OneDrive
 +--------+----------+
          |
          v
@@ -73,11 +73,12 @@ The system runs on a daily timer (02:00 UTC) or on-demand via HTTP trigger.
 
 ### 2.2 Entry Points
 
-| Entry Point      | Trigger                  | Auth           | Notes                           |
-| ---------------- | ------------------------ | -------------- | ------------------------------- |
-| `timer_trigger`  | CRON `0 0 2 * * *`       | N/A (internal) | Daily scheduled run             |
-| `manual_trigger` | HTTP POST `/api/trigger` | Function key   | On-demand, returns JSON results |
-| `health_check`   | HTTP GET `/api/health`   | Anonymous      | Returns `{status, version}`     |
+| Entry Point      | Trigger                  | Auth           | Notes                                                                     |
+| ---------------- | ------------------------ | -------------- | ------------------------------------------------------------------------- |
+| `timer_trigger`  | CRON `0 0 2 * * *`       | N/A (internal) | Daily scheduled run                                                       |
+| `manual_trigger` | HTTP POST `/api/trigger` | Function key   | On-demand, returns JSON results                                           |
+| `health_check`   | HTTP GET `/api/health`   | Anonymous      | Returns `{status, version}`                                               |
+| `cleanup_legacy` | HTTP POST `/api/cleanup` | Function key   | Deletes legacy `.yaml`/`.md` description files, supports `?dry_run=true`  |
 
 ## 3. External Dependencies
 
@@ -105,9 +106,9 @@ FolderProcessor ── orchestrates ──── Delta-to-Description Pipeline
 
 DeltaProcessor ─── produces ────── list[DriveItem]
 FolderProcessor ── produces ────── FolderListing
-AnthropicDescriber ── produces ── YAML metadata (str), folder type (str)
+AnthropicDescriber ── produces ── JSON metadata (str), folder type (str)
 generate_description ── produces ── FolderDescription (with DocumentRecords)
-FolderDescription ── serializes_to ── YAML (folder_description.yaml)
+FolderDescription ── serializes_to ── JSON (folder_description.json)
 
 SummaryCache ──── validates ────── content identity via SHA-256 hash
 DeltaProcessor ── governs ──────── loop prevention (filters self-changes)
@@ -169,7 +170,7 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 | `to`      | `str \| None`  | Who received the document, or None if N/A        |
 
 **Location**: `src/semantic_folder/description/models.py:30`
-**Role**: Value object for sender/recipient within a DocumentRecord. `from_` maps to `from` in YAML serialization.
+**Role**: Value object for sender/recipient within a DocumentRecord. `from_` maps to `from` in JSON serialization.
 
 ### 6.4 DocumentRecord
 
@@ -182,48 +183,53 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 | `parties`  | `Parties`           | Sender and recipient                                           |
 | `summary`  | `str`               | 2-3 sentence factual summary in English                        |
 | `tags`     | `list[str]`         | Lowercase keyword list for search (4-8 terms)                  |
-| `facts`    | `dict[str, object]` | Free-form key-value pairs with domain-specific structured data |
+| `facts`    | `dict[str, Any]`    | Free-form key-value pairs with domain-specific structured data |
+| `period`   | `str \| None`       | Covered time period (e.g. "2024-01 to 2024-12"), or None       |
 
 **Location**: `src/semantic_folder/description/models.py:42`
 **Role**: Structured metadata for a single file extracted by the LLM. Universal envelope (file through tags) plus free-form facts block.
 
 ### 6.5 FolderDescription
 
-| Attribute     | Type                    | Description                          |
-| ------------- | ----------------------- | ------------------------------------ |
-| `folder_path` | `str`                   | OneDrive path of the folder          |
-| `folder_type` | `str`                   | AI-inferred category label           |
-| `documents`   | `list[DocumentRecord]`  | Ordered list of document records     |
-| `updated_at`  | `str`                   | ISO date string (YYYY-MM-DD)         |
+| Attribute     | Type                   | Description                           |
+| ------------- | ---------------------- | ------------------------------------- |
+| `folder_path` | `str`                  | OneDrive path of the folder           |
+| `folder_type` | `str`                  | AI-inferred category label            |
+| `overview`    | `str`                  | Brief natural-language folder summary |
+| `period`      | `str \| None`          | Covered time period, or None          |
+| `documents`   | `list[DocumentRecord]` | Ordered list of document records      |
+| `updated_at`  | `str`                  | ISO date string (YYYY-MM-DD)          |
 
 **Location**: `src/semantic_folder/description/models.py:86`
-**Role**: The complete output model. Serialized to YAML via `to_yaml()` and uploaded to OneDrive as `folder_description.yaml`.
+**Role**: The complete output model. Serialized to JSON via `to_json()` and uploaded to OneDrive as `folder_description.json`.
 
 ### 6.6 DOC_TYPES
 
-**Location**: `src/semantic_folder/description/models.py:26` (loaded from `resources/doc_types.yaml`)
+**Location**: `src/semantic_folder/description/models.py:26` (loaded from `resources/doc_types.json` via `json.load()`)
 **Type**: `frozenset[str]` — 24 allowed values
-**Role**: Controlled vocabulary for `DocumentRecord.doc_type`. Used both for LLM prompt injection (allowed values list) and for validation in `parse_document_record()`. Single source of truth — update `resources/doc_types.yaml` to add/remove types without code changes.
+**Role**: Controlled vocabulary for `DocumentRecord.doc_type`. Used both for LLM prompt injection (allowed values list) and for validation in `parse_document_record()`. Single source of truth — update `resources/doc_types.json` to add/remove types without code changes.
 
 ### 6.7 AppConfig
 
-| Attribute                     | Type    | Description                          |
-| ----------------------------- | ------- | ------------------------------------ |
-| `client_id`                   | `str`   | Azure AD application ID              |
-| `client_secret`               | `str`   | Azure AD client secret               |
-| `tenant_id`                   | `str`   | Azure AD tenant ID                   |
-| `drive_user`                  | `str`   | OneDrive user UPN or object ID       |
-| `storage_connection_string`   | `str`   | Azure Storage connection string      |
-| `anthropic_api_key`           | `str`   | Anthropic API key                    |
-| `delta_container`             | `str`   | Blob container for delta token       |
-| `delta_blob`                  | `str`   | Blob path for delta token            |
-| `folder_description_filename` | `str`   | Name of generated description file   |
-| `anthropic_model`             | `str`   | Model identifier for Claude          |
-| `max_file_content_bytes`      | `int`   | Max bytes per file for summarization |
-| `cache_container`             | `str`   | Blob container for summary cache     |
-| `cache_blob_prefix`           | `str`   | Blob prefix for cached summaries     |
-| `anthropic_max_retries`       | `int`   | Max SDK retry attempts               |
-| `anthropic_request_delay`     | `float` | Inter-request delay (seconds)        |
+| Attribute                     | Type    | Description                                                       |
+| ----------------------------- | ------- | ----------------------------------------------------------------- |
+| `client_id`                   | `str`   | Azure AD application ID                                           |
+| `client_secret`               | `str`   | Azure AD client secret                                            |
+| `tenant_id`                   | `str`   | Azure AD tenant ID                                                |
+| `drive_user`                  | `str`   | OneDrive user UPN or object ID                                    |
+| `storage_connection_string`   | `str`   | Azure Storage connection string                                   |
+| `anthropic_api_key`           | `str`   | Anthropic API key                                                 |
+| `delta_container`             | `str`   | Blob container for delta token                                    |
+| `delta_blob`                  | `str`   | Blob path for delta token                                         |
+| `folder_description_filename` | `str`   | Name of generated description file                                |
+| `anthropic_model`             | `str`   | Model identifier for Claude                                       |
+| `max_file_content_bytes`      | `int`   | Max bytes per file for summarization                              |
+| `cache_container`             | `str`   | Blob container for summary cache                                  |
+| `cache_blob_prefix`           | `str`   | Blob prefix for cached summaries (default `json-metadata-cache/`) |
+| `anthropic_max_retries`       | `int`   | Max SDK retry attempts                                            |
+| `anthropic_request_delay`     | `float` | Inter-request delay (seconds)                                     |
+| `index_filename`              | `str`   | Name of the folder index file                                     |
+| `index_owner`                 | `str`   | Owner identifier for the index                                    |
 
 **Location**: `src/semantic_folder/config.py:8`
 **Role**: Frozen dataclass. Single source of truth for all configuration. Only `load_config()` reads environment variables; all other modules receive config via constructor injection.
@@ -240,6 +246,7 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 | `get(path)`                  | Authenticated GET → parsed JSON    |
 | `get_content(path)`          | Authenticated GET → raw bytes      |
 | `put_content(path, content)` | Authenticated PUT → upload content |
+| `delete(path)`               | Authenticated DELETE → remove item |
 
 **Authentication**: MSAL client credentials flow via `ConfidentialClientApplication`.
 
@@ -261,7 +268,7 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 
 | Method                                    | Description                                              |
 | ----------------------------------------- | -------------------------------------------------------- |
-| `extract_metadata(filename, content)`     | Dispatch by file type → structured YAML metadata string  |
+| `extract_metadata(filename, content)`     | Dispatch by file type → structured JSON metadata string  |
 | `classify_folder(folder_path, filenames)` | Folder path + file list → category label                 |
 | `summarize_file(filename, content)`       | Legacy: dispatch by file type → one-sentence summary     |
 
@@ -276,7 +283,7 @@ extract_metadata(filename, content)
     └── other  → _extract_text_file()  (UTF-8 decode, extraction prompt)
 ```
 
-**Extraction prompt**: `_EXTRACTION_PROMPT_TEMPLATE` defines the YAML schema, business context, and rules. `{allowed_doc_types}` placeholder is injected dynamically from `DOC_TYPES`. Max tokens: 1024.
+**Extraction prompt**: `_EXTRACTION_PROMPT_TEMPLATE` defines the JSON schema, business context, and rules. `{allowed_doc_types}` placeholder is injected dynamically from `DOC_TYPES`. Max tokens: 1024.
 
 **Resilience**: SDK-level retries (`max_retries`), inter-request delay (`time.sleep`). Errors propagate to caller (handled by `generate_description()` fallback).
 
@@ -289,22 +296,24 @@ extract_metadata(filename, content)
 | ---------------------------- | ----------------------------------- |
 | `content_hash(content)`      | SHA-256 hex digest (static)         |
 | `get(content_hash)`          | Retrieve cached metadata or `None`  |
-| `put(content_hash, metadata)`| Store metadata YAML string in blob  |
+| `put(content_hash, metadata)`| Store metadata JSON string in blob  |
 
-**Key scheme**: `{blob_prefix}{sha256_hex}` (e.g. `metadata-cache/a1b2c3...`)
+**Key scheme**: `{blob_prefix}{sha256_hex}` (e.g. `json-metadata-cache/a1b2c3...`)
 
 ### 7.5 FolderProcessor
 
 **Location**: `src/semantic_folder/orchestration/processor.py:33`
 **Purpose**: Top-level orchestrator for the full pipeline.
 
-| Method                        | Description                                                                         |
-| ----------------------------- | ----------------------------------------------------------------------------------- |
-| `process_delta()`             | Full pipeline: token → delta → resolve → enumerate → describe → upload → save token |
-| `resolve_folders(items)`      | Deduplicate parent folder IDs from changed files                                    |
-| `list_folder(folder_id)`      | Enumerate folder children → `FolderListing`                                         |
-| `read_file_contents(listing)` | Download file bytes via Graph API                                                   |
-| `upload_description(listing)` | Generate description + upload YAML                                                  |
+| Method | Description |
+| --- | --- |
+| `process_delta()` | Full pipeline: token → delta → resolve → enumerate → describe → upload → save token |
+| `resolve_folders(items)` | Deduplicate parent folder IDs from changed files |
+| `list_folder(folder_id)` | Enumerate folder children → `FolderListing` |
+| `read_file_contents(listing)` | Download file bytes via Graph API |
+| `upload_description(listing)` | Generate description + upload JSON |
+| `update_index()` | Rebuild and upload the folder index file |
+| `cleanup_legacy_descriptions(dry_run)` | Delete legacy `.yaml`/`.md` description files from OneDrive |
 
 ## 8. Value Objects
 
@@ -314,7 +323,7 @@ extract_metadata(filename, content)
 | `DocumentRecord`    | `description/models.py:42`  | Immutable structured metadata for a single file      |
 | `DriveItem`         | `graph/models.py:21`        | Immutable snapshot of a Graph drive item             |
 | `FolderListing`     | `graph/models.py:33`        | Immutable snapshot of a folder's file list           |
-| `FolderDescription` | `description/models.py:86`  | Immutable folder description with YAML serialization |
+| `FolderDescription` | `description/models.py:86`  | Immutable folder description with JSON serialization |
 
 Note: All are dataclasses without identity semantics — equality is by value. None are persisted directly; they are transient pipeline data.
 
@@ -366,8 +375,8 @@ Note: All are dataclasses without identity semantics — equality is by value. N
 | `GraphApiError`  | `graph/client.py:27`          | Graph API returns non-2xx (carries `status_code`, `message`) |
 | `ValueError`     | `graph/delta.py:153`          | Delta response missing `@odata.deltaLink`                    |
 | `ValueError`     | `description/describer.py:107` | No `TextBlock` in Anthropic response                        |
-| `ValueError`     | `description/generator.py:99`  | YAML parse failure in `parse_document_record()`             |
-| `ValueError`     | `description/generator.py:102` | Extracted data is not a YAML mapping                        |
+| `ValueError`     | `description/generator.py:99`  | JSON parse failure in `parse_document_record()`             |
+| `ValueError`     | `description/generator.py:102` | Extracted data is not a JSON object                         |
 | `KeyError`       | `config.py` (implicit)        | Required env var missing at startup                          |
 
 ## 11. Dependency Injection Pattern

@@ -856,18 +856,21 @@ class TestCleanupLegacyDescriptions:
 
     def test_deletes_matching_files(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
-        mock_graph.get.side_effect = [
-            {
-                "value": [
-                    {
-                        "id": "y1",
-                        "name": "folder_description.yaml",
-                        "parentReference": {"path": "/drive/root:/Docs"},
-                    },
-                ]
-            },
-            {"value": []},
-        ]
+
+        def _search(path: str) -> dict:
+            if "folder_description.yaml" in path:
+                return {
+                    "value": [
+                        {
+                            "id": "y1",
+                            "name": "folder_description.yaml",
+                            "parentReference": {"path": "/drive/root:/Docs"},
+                        },
+                    ]
+                }
+            return {"value": []}
+
+        mock_graph.get.side_effect = _search
 
         result = processor.cleanup_legacy_descriptions()
 
@@ -879,18 +882,21 @@ class TestCleanupLegacyDescriptions:
 
     def test_dry_run_does_not_delete(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
-        mock_graph.get.side_effect = [
-            {
-                "value": [
-                    {
-                        "id": "y1",
-                        "name": "folder_description.yaml",
-                        "parentReference": {"path": "/drive/root:/Docs"},
-                    },
-                ]
-            },
-            {"value": []},
-        ]
+
+        def _search(path: str) -> dict:
+            if "folder_description.yaml" in path:
+                return {
+                    "value": [
+                        {
+                            "id": "y1",
+                            "name": "folder_description.yaml",
+                            "parentReference": {"path": "/drive/root:/Docs"},
+                        },
+                    ]
+                }
+            return {"value": []}
+
+        mock_graph.get.side_effect = _search
 
         result = processor.cleanup_legacy_descriptions(dry_run=True)
 
@@ -899,18 +905,21 @@ class TestCleanupLegacyDescriptions:
 
     def test_filters_non_matching_names(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
-        mock_graph.get.side_effect = [
-            {
-                "value": [
-                    {
-                        "id": "x1",
-                        "name": "other_description.yaml",
-                        "parentReference": {"path": "/drive/root:/Docs"},
-                    },
-                ]
-            },
-            {"value": []},
-        ]
+
+        def _search(path: str) -> dict:
+            if "folder_description.yaml" in path:
+                return {
+                    "value": [
+                        {
+                            "id": "x1",
+                            "name": "other_description.yaml",
+                            "parentReference": {"path": "/drive/root:/Docs"},
+                        },
+                    ]
+                }
+            return {"value": []}
+
+        mock_graph.get.side_effect = _search
 
         result = processor.cleanup_legacy_descriptions()
 
@@ -919,17 +928,20 @@ class TestCleanupLegacyDescriptions:
 
     def test_skips_items_without_id(self) -> None:
         processor, _, mock_graph, _ = _make_processor()
-        mock_graph.get.side_effect = [
-            {
-                "value": [
-                    {
-                        "name": "folder_description.yaml",
-                        "parentReference": {"path": "/drive/root:/Docs"},
-                    },
-                ]
-            },
-            {"value": []},
-        ]
+
+        def _search(path: str) -> dict:
+            if "folder_description.yaml" in path:
+                return {
+                    "value": [
+                        {
+                            "name": "folder_description.yaml",
+                            "parentReference": {"path": "/drive/root:/Docs"},
+                        },
+                    ]
+                }
+            return {"value": []}
+
+        mock_graph.get.side_effect = _search
 
         result = processor.cleanup_legacy_descriptions()
 

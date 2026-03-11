@@ -496,8 +496,8 @@ class TestProcessDelta:
         assert listing.folder_path == "/drive/root:/My Folder"
         assert sorted(listing.files) == ["data.csv", "readme.md"]
 
-    def test_uploads_descriptions_before_saving_token(self) -> None:
-        """Descriptions must be uploaded before the delta token is saved."""
+    def test_saves_token_before_processing_folders(self) -> None:
+        """Delta token must be saved before folder processing begins."""
         processor, mock_delta, mock_graph, _ = _make_processor()
 
         mock_delta.get_delta_token.return_value = "tok"
@@ -524,8 +524,8 @@ class TestProcessDelta:
 
         processor.process_delta()
 
-        assert call_order[-1] == "save_delta_token"
-        assert all(c == "put_content" for c in call_order[:-1])
+        assert call_order[0] == "save_delta_token"
+        assert all(c == "put_content" for c in call_order[1:])
 
     def test_uploads_description_for_each_listing(self) -> None:
         """Each folder listing should trigger a put_content call."""
@@ -544,6 +544,35 @@ class TestProcessDelta:
         processor.process_delta()
 
         assert mock_graph.put_content.call_count == 3
+
+    def test_continues_on_folder_failure(self) -> None:
+        """A failure processing one folder should not stop the rest."""
+        processor, mock_delta, mock_graph, _ = _make_processor()
+
+        mock_delta.get_delta_token.return_value = None
+        mock_delta.fetch_changes.return_value = (
+            [
+                _file_item(id="i1", parent_id="p1"),
+                _file_item(id="i2", parent_id="p2"),
+            ],
+            "tok",
+        )
+
+        call_count = 0
+
+        def get_side_effect(path: str, **kwargs: object) -> dict:  # type: ignore[type-arg]
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("Graph API error")
+            return {"value": []}
+
+        mock_graph.get.side_effect = get_side_effect
+
+        results = processor.process_delta()
+
+        assert len(results) == 1
+        mock_delta.save_delta_token.assert_called_once_with("tok")
 
 
 # ---------------------------------------------------------------------------

@@ -330,16 +330,14 @@ class FolderProcessor:
         Steps:
             1. Retrieve the persisted delta token (None on first run).
             2. Fetch changed items from the delta API.
-            3. Resolve unique parent folder IDs from changed file items.
-            4. Enumerate each folder's children to build FolderListing objects.
-            5. Generate and upload a description file for each folder.
-            6. Update the root index file.
-            7. Persist the new delta token.
+            3. Save the delta token immediately (so a timeout doesn't
+               force a full rescan on the next run).
+            4. Resolve unique parent folder IDs from changed file items.
+            5. Enumerate each folder's children to build FolderListing objects.
+            6. Generate and upload a description file for each folder,
+               continuing on individual folder failures.
+            7. Update the root index file.
             8. Return the list of FolderListing objects.
-
-        Descriptions and index are uploaded before the delta token is saved
-        so that a failed upload does not advance the token, allowing retry
-        on the next cycle.
 
         Returns:
             List of FolderListing objects for folders that were processed.
@@ -348,15 +346,30 @@ class FolderProcessor:
         token = self._delta.get_delta_token()
         items, new_token = self._delta.fetch_changes(token)
         logger.info("[process_delta] fetched changes; item_count:%d", len(items))
+
+        # Save the token early so a timeout or crash during folder processing
+        # does not force a full rescan on the next run.
+        self._delta.save_delta_token(new_token)
+
         folder_ids = self.resolve_folders(items)
         logger.info("[process_delta] resolved folders; folder_count:%d", len(folder_ids))
-        listings = [self.list_folder(fid) for fid in folder_ids]
-        for listing in listings:
-            self.upload_description(listing)
+        listings: list[FolderListing] = []
+        failed = 0
+        for fid in folder_ids:
+            try:
+                listing = self.list_folder(fid)
+                self.upload_description(listing)
+                listings.append(listing)
+            except Exception:
+                failed += 1
+                logger.exception("[process_delta] failed to process folder; folder_id:%s", fid)
         if listings:
             self.update_index()
-        self._delta.save_delta_token(new_token)
-        logger.info("[process_delta] pipeline complete; listing_count:%d", len(listings))
+        logger.info(
+            "[process_delta] pipeline complete; processed:%d;failed:%d",
+            len(listings),
+            failed,
+        )
         return listings
 
 

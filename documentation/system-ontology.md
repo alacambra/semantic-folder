@@ -39,37 +39,31 @@ The system runs on a daily timer (02:00 UTC) or on-demand via HTTP trigger.
          |
          v
 +-------------------+
-| 3. Resolve Folders|  Deduplicate parent folder IDs from changed file items
+| 3. Save Token     |  Persist new delta token immediately (avoid full rescan on crash)
 +--------+----------+
          |
          v
 +-------------------+
-| 4. Enumerate      |  GET /children for each folder → FolderListing
+| 4. Resolve Folders|  Deduplicate parent folder IDs from changed file items
 +--------+----------+
          |
          v
-+-------------------+
-| 5. Read Contents  |  Download raw bytes for each file via Graph API
-+--------+----------+
-         |
-         v
-+-------------------+
-| 6. Describe       |  For each file: check cache → extract JSON metadata via LLM → cache
++-------------------+  Per-folder: errors are caught and logged,
+| 5. Process Folders|  remaining folders continue.
+|   a. Enumerate    |  GET /children for each folder → FolderListing
+|   b. Read Contents|  Download raw bytes for each file via Graph API
+|   c. Describe     |  For each file: check cache → extract JSON metadata via LLM → cache
 |                   |  Classify folder type via LLM
+|   d. Upload       |  Serialize FolderDescription to JSON, PUT to OneDrive
 +--------+----------+
          |
          v
 +-------------------+
-| 7. Upload         |  Serialize FolderDescription to JSON, PUT to OneDrive
-+--------+----------+
-         |
-         v
-+-------------------+
-| 8. Save Token     |  Persist new delta token (only after successful upload)
+| 6. Update Index   |  Rebuild and upload onedrive_index.json (if any folders succeeded)
 +-------------------+
 ```
 
-**Key invariant**: Descriptions are uploaded (step 7) _before_ the delta token is saved (step 8). A failed upload does not advance the token, allowing retry on the next cycle.
+**Key invariant**: The delta token is saved (step 3) _before_ folder processing begins (step 5). A timeout or crash during folder processing does not force a full rescan on the next run. Individual folder failures are caught and logged, allowing remaining folders to complete.
 
 ### 2.2 Entry Points
 
@@ -191,17 +185,16 @@ The `FolderProcessor` is the composition root for the pipeline. All child compon
 
 ### 6.5 FolderDescription
 
-| Attribute     | Type                   | Description                           |
-| ------------- | ---------------------- | ------------------------------------- |
-| `folder_path` | `str`                  | OneDrive path of the folder           |
-| `folder_type` | `str`                  | AI-inferred category label            |
-| `overview`    | `str`                  | Brief natural-language folder summary |
-| `period`      | `str \| None`          | Covered time period, or None          |
-| `documents`   | `list[DocumentRecord]` | Ordered list of document records      |
-| `updated_at`  | `str`                  | ISO date string (YYYY-MM-DD)          |
+| Attribute     | Type                   | Description                                           |
+| ------------- | ---------------------- | ----------------------------------------------------- |
+| `folder_path` | `str`                  | OneDrive path of the folder                           |
+| `folder_type` | `str`                  | AI-inferred category label                            |
+| `documents`   | `list[DocumentRecord]` | Ordered list of document records                      |
+| `updated_at`  | `str`                  | ISO date string (YYYY-MM-DD)                          |
+| `period`      | `str \| None`          | Inferred period (e.g. "2026-03"), None if multi-month |
 
-**Location**: `src/semantic_folder/description/models.py:86`
-**Role**: The complete output model. Serialized to JSON via `to_json()` and uploaded to OneDrive as `folder_description.json`.
+**Location**: `src/semantic_folder/description/models.py:78`
+**Role**: The complete output model. Serialized to JSON via `to_json()` and uploaded to OneDrive as `folder_description.json`. The `_build_overview()` method computes aggregate statistics (document_count, date_range, types_present, total_amount_eur, expense/country breakdowns) at serialization time — these are not stored as attributes.
 
 ### 6.6 DOC_TYPES
 
@@ -307,7 +300,7 @@ extract_metadata(filename, content)
 
 | Method | Description |
 | --- | --- |
-| `process_delta()` | Full pipeline: token → delta → resolve → enumerate → describe → upload → save token |
+| `process_delta()` | Full pipeline: token → delta → save token → resolve → enumerate → describe → upload → update index. Per-folder errors are caught and logged. |
 | `resolve_folders(items)` | Deduplicate parent folder IDs from changed files |
 | `list_folder(folder_id)` | Enumerate folder children → `FolderListing` |
 | `read_file_contents(listing)` | Download file bytes via Graph API |
@@ -317,13 +310,14 @@ extract_metadata(filename, content)
 
 ## 8. Value Objects
 
-| Value Object        | Location                    | Description                                          |
-| ------------------- | --------------------------- | ---------------------------------------------------- |
-| `Parties`           | `description/models.py:30`  | Immutable sender/recipient pair                      |
-| `DocumentRecord`    | `description/models.py:42`  | Immutable structured metadata for a single file      |
-| `DriveItem`         | `graph/models.py:21`        | Immutable snapshot of a Graph drive item             |
-| `FolderListing`     | `graph/models.py:33`        | Immutable snapshot of a folder's file list           |
-| `FolderDescription` | `description/models.py:86`  | Immutable folder description with JSON serialization |
+| Value Object        | Location                   | Description                                           |
+| ------------------- | -------------------------- | ----------------------------------------------------- |
+| `Parties`           | `description/models.py:30` | Immutable sender/recipient pair                       |
+| `DocumentRecord`    | `description/models.py:42` | Immutable structured metadata for a single file       |
+| `DriveItem`         | `graph/models.py:21`       | Immutable snapshot of a Graph drive item              |
+| `FolderListing`     | `graph/models.py:33`       | Immutable snapshot of a folder's file list            |
+| `CategoryBreakdown` | `description/models.py:70` | Immutable count + total pair for overview aggregation |
+| `FolderDescription` | `description/models.py:78` | Immutable folder description with JSON serialization  |
 
 Note: All are dataclasses without identity semantics — equality is by value. None are persisted directly; they are transient pipeline data.
 
